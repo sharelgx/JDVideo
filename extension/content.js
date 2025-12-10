@@ -247,17 +247,66 @@ function markPendingSku(sku) {
 }
 
 function dispatchHumanClick(btn) {
+  if (!btn) return;
+  
   try {
-    btn.dispatchEvent(
-      new MouseEvent("click", {
+    // 对于 <a> 标签，尝试多种方式触发
+    if (btn.tagName === "A") {
+      // 方法1: 创建并派发完整的鼠标事件序列
+      const events = [
+        new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window, button: 0 }),
+        new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window, button: 0 }),
+        new MouseEvent("click", { bubbles: true, cancelable: true, view: window, button: 0 })
+      ];
+      
+      events.forEach(evt => {
+        try {
+          btn.dispatchEvent(evt);
+        } catch (e) {
+          // ignore
+        }
+      });
+      
+      // 方法2: 如果有 href，尝试触发默认行为
+      if (btn.href) {
+        // 先尝试直接点击
+        try {
+          btn.click();
+        } catch (e) {
+          // 如果失败，尝试手动触发导航（但不实际导航）
+          // 这可能会触发相关的事件监听器
+        }
+      }
+    } else {
+      // 对于 button 或其他元素，使用标准点击事件
+      const clickEvent = new MouseEvent("click", {
         bubbles: true,
         cancelable: true,
-        view: window
-      })
-    );
+        view: window,
+        button: 0,
+        buttons: 1
+      });
+      
+      btn.dispatchEvent(clickEvent);
+      
+      // 也尝试直接调用 click() 方法
+      if (typeof btn.click === "function") {
+        btn.click();
+      }
+    }
+    
+    log("content:dispatch_click", { 
+      tag: btn.tagName, 
+      href: btn.href || null,
+      className: btn.className || null 
+    });
   } catch (e) {
+    log("content:dispatch_click_error", { error: e.message });
+    // 最后的备选方案
     try {
-      btn.click();
+      if (typeof btn.click === "function") {
+        btn.click();
+      }
     } catch (err) {
       // ignore
     }
@@ -281,20 +330,70 @@ function findContainer(node) {
 
 function findDownloadButton(container) {
   if (!container) return null;
-  const candidates = container.querySelectorAll("p, a, button, span");
-  return Array.from(candidates).find((el) => /下载/.test(el.textContent || ""));
+  // 优先查找 <a> 标签（通常包含下载链接）
+  const linkCandidates = container.querySelectorAll("a");
+  const linkBtn = Array.from(linkCandidates).find((el) => {
+    const text = el.textContent || "";
+    const innerText = Array.from(el.querySelectorAll("p, span")).map(p => p.textContent).join("");
+    return /下载/.test(text) || /下载/.test(innerText);
+  });
+  if (linkBtn) return linkBtn;
+  
+  // 如果没找到 <a>，查找 <button>
+  const buttonCandidates = container.querySelectorAll("button");
+  const buttonBtn = Array.from(buttonCandidates).find((el) => {
+    const text = el.textContent || "";
+    return /下载/.test(text);
+  });
+  if (buttonBtn) {
+    // 如果 button 内部有 <a>，优先返回 <a>
+    const innerLink = buttonBtn.querySelector("a");
+    if (innerLink) return innerLink;
+    return buttonBtn;
+  }
+  
+  // 最后查找其他元素
+  const candidates = container.querySelectorAll("p, span");
+  const otherBtn = Array.from(candidates).find((el) => /下载/.test(el.textContent || ""));
+  if (otherBtn) {
+    // 向上查找是否有 <a> 或 <button> 父元素
+    const parentLink = otherBtn.closest("a");
+    if (parentLink) return parentLink;
+    const parentButton = otherBtn.closest("button");
+    if (parentButton) {
+      const innerLink = parentButton.querySelector("a");
+      if (innerLink) return innerLink;
+      return parentButton;
+    }
+    return otherBtn;
+  }
+  
+  return null;
 }
 
 function readUrlFromButton(btn) {
   if (!btn) return null;
-  return (
+  // 尝试多种方式读取URL
+  const url = (
     btn.dataset?.src ||
     btn.dataset?.url ||
     btn.getAttribute("data-src") ||
     btn.getAttribute("data-url") ||
     btn.getAttribute("href") ||
+    (btn.tagName === "A" ? btn.href : null) ||
     null
   );
+  
+  // 如果没有找到URL，可能是因为URL是动态加载的，这是正常的
+  if (!url) {
+    log("content:no_url_in_button", { 
+      tag: btn.tagName,
+      className: btn.className || "",
+      hasClstag: btn.hasAttribute("clstag")
+    });
+  }
+  
+  return url;
 }
 
 function attachClickHook(btn, sku) {

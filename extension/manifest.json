@@ -10,9 +10,7 @@
     "storage"
   ],
   "host_permissions": [
-    "https://jlive.jd.com/*",
-    "http://127.0.0.1/*",
-    "http://localhost/*"
+    "https://jlive.jd.com/*"
   ],
   "background": {
     "service_worker": "background.js"

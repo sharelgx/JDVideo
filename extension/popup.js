@@ -1,9 +1,6 @@
 let activeTabId = null;
 let currentItems = [];
 let folderPath = ""; // legacy, UI 已移除
-let serviceUrl = "";
-let serviceFolder = "";
-let logEndpoint = "http://127.0.0.1:3030/log";
 
 document.addEventListener("DOMContentLoaded", () => {
   init();
@@ -13,7 +10,6 @@ async function init() {
   await resolveActiveTab();
   // folderPath legacy 保留，但不再从存储读取
   await loadService();
-  await syncLogEndpoint();
   bindEvents();
   await refreshItems();
   chrome.runtime.onMessage.addListener(handleProgress);
@@ -28,17 +24,6 @@ function bindEvents() {
   document.getElementById("refresh").addEventListener("click", refreshItems);
   document.getElementById("downloadAll").addEventListener("click", startDownload);
   document.getElementById("autoCapture").addEventListener("click", autoCapture);
-  const serviceUrlInput = document.getElementById("serviceUrl");
-  const serviceFolderInput = document.getElementById("serviceFolder");
-  serviceUrlInput.addEventListener("input", (e) => {
-    serviceUrl = (e.target.value || "").trim();
-    saveService();
-  });
-  serviceFolderInput.addEventListener("input", (e) => {
-    serviceFolder = (e.target.value || "").trim();
-    saveService();
-  });
-  document.getElementById("sendToLocal").addEventListener("click", sendToLocal);
 }
 
 async function refreshItems() {
@@ -179,71 +164,7 @@ function updateStats() {
 }
 
 async function loadService() {
-  try {
-    const res = await chrome.storage.local.get(["serviceUrl", "serviceFolder", "logEndpoint"]);
-    serviceUrl = res?.serviceUrl || "http://127.0.0.1:3030";
-    serviceFolder = res?.serviceFolder || "";
-    logEndpoint = res?.logEndpoint || "http://127.0.0.1:3030/log";
-    const urlInput = document.getElementById("serviceUrl");
-    const folderInput = document.getElementById("serviceFolder");
-    if (urlInput) urlInput.value = serviceUrl;
-    if (folderInput) folderInput.value = serviceFolder;
-  } catch (e) {
-    // ignore
-  }
-}
-
-function saveService() {
-  chrome.storage.local.set({
-    serviceUrl: serviceUrl || "",
-    serviceFolder: serviceFolder || "",
-    logEndpoint: logEndpoint || "http://127.0.0.1:3030/log"
-  });
-}
-
-async function syncLogEndpoint() {
-  try {
-    await chrome.runtime.sendMessage({ type: "SET_LOG_ENDPOINT", url: logEndpoint });
-  } catch (e) {
-    // ignore
-  }
-}
-
-async function sendToLocal() {
-  const ready = currentItems.filter((item) => item.videoUrl);
-  if (!ready.length) {
-    setInfo("没有可发送的条目（未捕获到视频地址）");
-    return;
-  }
-  if (!serviceUrl) {
-    setInfo("请先填写本地服务地址");
-    return;
-  }
-  setInfo("发送到本地服务中…");
-  log("popup:send_local", { count: ready.length, serviceUrl });
-  try {
-    const resp = await fetch(serviceUrl.replace(/\/+$/, "") + "/download", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        target_dir: serviceFolder || null,
-        sub_dir: null,
-        items: ready.map((item) => ({
-          sku: item.sku,
-          title: item.title,
-          videoUrl: item.videoUrl,
-          headers: item.headers || null
-        }))
-      })
-    });
-    const data = await resp.json();
-    if (!resp.ok || !data?.ok) {
-      throw new Error(data?.error || `请求失败: ${resp.status}`);
-    }
-    setInfo(`已发送到本地服务，成功 ${data.success}/${data.total}`);
-  } catch (e) {
-    setInfo(`本地服务错误：${e.message}`);
-  }
+  // v2 无本地服务配置
 }
 
 function escapeHtml(str) {

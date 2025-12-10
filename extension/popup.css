@@ -59,6 +59,10 @@ h1 {
   margin-left: auto;
 }
 
+#autoCapture {
+  display: none; /* 隐藏自动捕获URL按钮，功能保留 */
+}
+
 .card.inline {
   background: #fff;
   border: 1px solid #e2e8f0;

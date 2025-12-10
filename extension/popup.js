@@ -51,10 +51,14 @@ async function refreshItems() {
     renderList();
     updateStats();
     const missing = currentItems.filter((i) => !i.videoUrl).length;
-    setInfo(`解析完成，共 ${currentItems.length} 条${missing ? `，待捕获 ${missing}` : ""}`);
+    setInfo(`解析完成，共 ${currentItems.length} 条${missing ? `，待捕获 ${missing} 条` : ""}`);
     if (missing > 0) {
       // 自动尝试捕获，减少人工操作
-      autoCapture();
+      setInfo(`解析完成，共 ${currentItems.length} 条，正在自动捕获 ${missing} 条视频地址…`);
+      autoCapture().catch((err) => {
+        setInfo(`自动捕获失败，请点击“自动捕获 URL”按钮重试`);
+        log("popup:auto_capture_failed", { error: err?.message });
+      });
     }
   } catch (error) {
     setInfo("解析失败，请确认已在直播讲解页");
@@ -104,8 +108,13 @@ function statusLabel(status) {
 async function startDownload() {
   const ready = currentItems.filter((item) => item.videoUrl);
   if (!ready.length) {
-    setInfo("未捕获到视频地址，请在页面点击“下载”后重试");
-    log("popup:download_no_urls");
+    const pending = currentItems.filter((item) => !item.videoUrl && item.hasDownloadButton);
+    if (pending.length > 0) {
+      setInfo(`还有 ${pending.length} 条待捕获，请先点击“自动捕获 URL”按钮`);
+    } else {
+      setInfo("未捕获到视频地址，请先点击“解析列表”，然后点击“自动捕获 URL”");
+    }
+    log("popup:download_no_urls", { total: currentItems.length, ready: ready.length, pending: pending.length });
     return;
   }
   
@@ -183,7 +192,13 @@ async function autoCapture() {
     updateStats();
     const success = res?.successCount || 0;
     const total = res?.totalTried || 0;
-    setInfo(`自动捕获完成，成功 ${success}/${total}${success < total ? "，可在后台管理查看日志" : ""}`);
+    const stillMissing = currentItems.filter((i) => !i.videoUrl).length;
+    
+    if (success > 0) {
+      setInfo(`自动捕获完成，成功 ${success}/${total}${stillMissing > 0 ? `，仍有 ${stillMissing} 条待捕获，可点击“自动捕获 URL”重试` : ""}`);
+    } else {
+      setInfo(`自动捕获完成，但未捕获到视频地址（0/${total}）。请检查后台日志或手动点击页面上的“下载”按钮`);
+    }
   } catch (error) {
     const errorMsg = error?.message || String(error);
     setInfo(`自动捕获异常：${errorMsg}。请刷新页面或查看后台日志`);

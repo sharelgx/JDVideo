@@ -54,10 +54,23 @@
         (response && response.url) ||
         (typeof args[0] === "string" ? args[0] : args[0]?.url) ||
         "";
+      const ctype = response?.headers?.get?.("content-type") || "";
       if (isVideoUrl(reqUrl, response?.headers)) {
         notifyCapture(reqUrl, { via: "fetch" });
-      } else if (state.pendingSku) {
-        // 当存在待绑定 SKU 时，也抓取一次作为兜底
+      } else if (/json/i.test(ctype)) {
+        // 尝试从 JSON 响应中提取视频 URL
+        const cloned = response.clone();
+        cloned
+          .json()
+          .then((data) => {
+            const url = extractUrlFromJson(data);
+            if (url && isLikelyVideo(url)) {
+              notifyCapture(url, { via: "fetch_json" });
+            }
+          })
+          .catch(() => {});
+      } else if (state.pendingSku && !/text\/html/i.test(ctype)) {
+        // 当存在待绑定 SKU 且非明显 HTML 时，兜底抓取
         notifyCapture(reqUrl, { via: "fetch_fallback" });
       } else {
         log("inject:fetch_skip", { url: reqUrl });
@@ -85,6 +98,17 @@
           const contentType = this.getResponseHeader("content-type") || "";
           if (isVideoUrl(url, { get: () => contentType })) {
             notifyCapture(url, { via: "xhr" });
+          } else if (/json/i.test(contentType)) {
+            try {
+              const data = JSON.parse(this.responseText || "{}");
+              const videoUrl = extractUrlFromJson(data);
+              if (videoUrl && isLikelyVideo(videoUrl)) {
+                notifyCapture(videoUrl, { via: "xhr_json" });
+                return;
+              }
+            } catch (e) {
+              // ignore
+            }
           } else if (state.pendingSku) {
             notifyCapture(url, { via: "xhr_fallback" });
           } else {
@@ -120,6 +144,43 @@
       ua: window.navigator.userAgent,
       cookie: document.cookie || ""
     };
+  }
+
+  function extractUrlFromJson(obj) {
+    if (!obj) return null;
+    if (typeof obj === "string") {
+      if (isLikelyVideo(obj)) return obj;
+      return null;
+    }
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        const found = extractUrlFromJson(item);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (typeof obj === "object") {
+      for (const key of Object.keys(obj)) {
+        const val = obj[key];
+        if (typeof val === "string" && isLikelyVideo(val)) return val;
+        const found = extractUrlFromJson(val);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  function isLikelyVideo(url) {
+    if (!url || typeof url !== "string") return false;
+    const lower = url.toLowerCase();
+    return (
+      lower.includes(".mp4") ||
+      lower.includes(".m3u8") ||
+      lower.includes(".flv") ||
+      lower.includes(".ts") ||
+      lower.includes("video") ||
+      lower.includes("vod")
+    );
   }
 })();
 

@@ -69,21 +69,8 @@ def download_file(url: str, path: str, retry: int = 2, headers: dict | None = No
                 return False, str(e)
 
 
-def append_log(log_file: str, data: dict):
-    try:
-        ensure_dir(log_file)
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"ts": __import__("time").time(), **data}, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-
-
 class Handler(BaseHTTPRequestHandler):
     server_version = "JDVideoLocalDownloader/0.1"
-
-    def log_message(self, format, *args):
-        # suppress default console noise; we log manually
-        return
 
     def _send_json(self, status: int, data: dict):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -106,10 +93,6 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return self._send_json(400, {"ok": False, "error": "invalid_json"})
 
-        if parsed.path == "/log":
-            append_log(self.server.log_file, payload)
-            return self._send_json(200, {"ok": True})
-
         if parsed.path != "/download":
             return self._send_json(404, {"ok": False, "error": "not_found"})
 
@@ -122,8 +105,6 @@ class Handler(BaseHTTPRequestHandler):
 
         results = []
         success = 0
-        append_log(self.server.log_file, {"event": "server:recv", "count": len(items), "target": target_dir, "sub": sub_dir})
-
         with ThreadPoolExecutor(max_workers=self.server.concurrency) as pool:
             futures = {}
             for item in items:
@@ -144,10 +125,8 @@ class Handler(BaseHTTPRequestHandler):
                 if ok:
                     success += 1
                     results.append({"sku": sku, "title": title, "ok": True, "path": path})
-                    append_log(self.server.log_file, {"event": "ok", "sku": sku, "path": path})
                 else:
                     results.append({"sku": sku, "title": title, "ok": False, "error": err, "url": url})
-                    append_log(self.server.log_file, {"event": "fail", "sku": sku, "error": err, "url": url})
 
         return self._send_json(200, {"ok": True, "success": success, "total": len(items), "results": results})
 
@@ -157,7 +136,6 @@ def run_server(host: str, port: int, root_dir: str, concurrency: int, retry: int
     server.root_dir = root_dir
     server.concurrency = concurrency
     server.retry = retry
-    server.log_file = os.path.join(root_dir, "logs", "jdvideo.log")
     print(f"[server] listening on http://{host}:{port}, root={root_dir}, concurrency={concurrency}, retry={retry}")
     try:
         server.serve_forever()

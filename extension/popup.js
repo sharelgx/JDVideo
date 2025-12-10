@@ -3,7 +3,6 @@ let currentItems = [];
 let folderPath = ""; // legacy, UI 已移除
 let serviceUrl = "";
 let serviceFolder = "";
-let logEndpoint = "http://127.0.0.1:3030/log";
 
 document.addEventListener("DOMContentLoaded", () => {
   init();
@@ -13,7 +12,6 @@ async function init() {
   await resolveActiveTab();
   // folderPath legacy 保留，但不再从存储读取
   await loadService();
-  await syncLogEndpoint();
   bindEvents();
   await refreshItems();
   chrome.runtime.onMessage.addListener(handleProgress);
@@ -180,10 +178,9 @@ function updateStats() {
 
 async function loadService() {
   try {
-    const res = await chrome.storage.local.get(["serviceUrl", "serviceFolder", "logEndpoint"]);
+    const res = await chrome.storage.local.get(["serviceUrl", "serviceFolder"]);
     serviceUrl = res?.serviceUrl || "http://127.0.0.1:3030";
     serviceFolder = res?.serviceFolder || "";
-    logEndpoint = res?.logEndpoint || "http://127.0.0.1:3030/log";
     const urlInput = document.getElementById("serviceUrl");
     const folderInput = document.getElementById("serviceFolder");
     if (urlInput) urlInput.value = serviceUrl;
@@ -196,17 +193,8 @@ async function loadService() {
 function saveService() {
   chrome.storage.local.set({
     serviceUrl: serviceUrl || "",
-    serviceFolder: serviceFolder || "",
-    logEndpoint: logEndpoint || "http://127.0.0.1:3030/log"
+    serviceFolder: serviceFolder || ""
   });
-}
-
-async function syncLogEndpoint() {
-  try {
-    await chrome.runtime.sendMessage({ type: "SET_LOG_ENDPOINT", url: logEndpoint });
-  } catch (e) {
-    // ignore
-  }
 }
 
 async function sendToLocal() {

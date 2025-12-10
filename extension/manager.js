@@ -4,6 +4,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 async function init() {
   await loadService();
+  await syncLogEndpoint();
   bindEvents();
   await refreshLogs();
 }
@@ -30,6 +31,7 @@ async function saveService() {
     serviceUrl: url,
     serviceFolder: folder
   });
+  await syncLogEndpoint();
   setServiceInfo("已保存配置");
 }
 
@@ -73,6 +75,15 @@ async function clearLogs() {
   // 仅清前端展示，后台日志不会清空，以免丢数据
   const box = document.getElementById("logList");
   box.textContent = "已清空本地视图（后台仍保留历史）";
+}
+
+async function syncLogEndpoint() {
+  try {
+    const url = (document.getElementById("serviceUrl").value || "http://127.0.0.1:3030").trim();
+    await chrome.runtime.sendMessage({ type: "SET_LOG_ENDPOINT", url: url.replace(/\\/+$/, "") + "/log" });
+  } catch (e) {
+    // ignore
+  }
 }
 
 function escapeHtml(str) {

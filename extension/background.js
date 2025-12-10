@@ -2,6 +2,8 @@ const DEFAULT_CONCURRENCY = 3;
 const DEFAULT_RETRY = 2;
 const LOG_LIMIT = 300;
 const logs = [];
+const DEFAULT_LOG_ENDPOINT = "http://127.0.0.1:3030/log";
+let logEndpoint = DEFAULT_LOG_ENDPOINT;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "START_DOWNLOADS") {
@@ -15,7 +17,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message?.type === "GET_LOGS") {
-    sendResponse({ ok: true, logs: [...logs] });
+    sendResponse({ ok: true, logs: [...logs], logEndpoint });
+    return true;
+  }
+  if (message?.type === "LOG") {
+    log(message.event || "log", {
+      origin: message.origin || sender?.url || "unknown",
+      data: message.data
+    });
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (message?.type === "SET_LOG_ENDPOINT") {
+    logEndpoint = message.url || DEFAULT_LOG_ENDPOINT;
+    sendResponse({ ok: true, logEndpoint });
     return true;
   }
   return false;
@@ -30,6 +45,20 @@ function log(event, data) {
   logs.push(entry);
   if (logs.length > LOG_LIMIT) logs.shift();
   console.debug("[jdvideo]", event, data || "");
+  postLog(entry);
+}
+
+function postLog(entry) {
+  try {
+    const url = logEndpoint || DEFAULT_LOG_ENDPOINT;
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(entry)
+    }).catch(() => {});
+  } catch (e) {
+    // ignore
+  }
 }
 
 function sanitizeFilenamePart(input) {

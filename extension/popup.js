@@ -1,6 +1,8 @@
 let activeTabId = null;
 let currentItems = [];
 let folderPath = ""; // legacy, UI 已移除
+let serviceUrl = "http://127.0.0.1:3030";
+let serviceFolder = "";
 
 document.addEventListener("DOMContentLoaded", () => {
   init();
@@ -27,6 +29,10 @@ function bindEvents() {
   document.getElementById("openManager").addEventListener("click", () => {
     chrome.runtime.openOptionsPage();
   });
+  const sendBtn = document.getElementById("sendToLocal");
+  if (sendBtn) {
+    sendBtn.addEventListener("click", sendToLocal);
+  }
 }
 
 async function refreshItems() {
@@ -167,7 +173,66 @@ function updateStats() {
 }
 
 async function loadService() {
-  // v2 无本地服务配置
+  try {
+    const res = await chrome.storage.local.get(["serviceUrl", "serviceFolder"]);
+    serviceUrl = res?.serviceUrl || "http://127.0.0.1:3030";
+    serviceFolder = res?.serviceFolder || "";
+    const urlInputInline = document.getElementById("serviceUrlInline");
+    const folderInputInline = document.getElementById("serviceFolderInline");
+    if (urlInputInline) urlInputInline.value = serviceUrl;
+    if (folderInputInline) folderInputInline.value = serviceFolder;
+  } catch (e) {
+    // ignore
+  }
+}
+
+function saveService() {
+  chrome.storage.local.set({
+    serviceUrl: serviceUrl || "",
+    serviceFolder: serviceFolder || ""
+  });
+}
+
+async function sendToLocal() {
+  const ready = currentItems.filter((item) => item.videoUrl);
+  if (!ready.length) {
+    setInfo("没有可发送的条目（未捕获到视频地址）");
+    return;
+  }
+  const urlInputInline = document.getElementById("serviceUrlInline");
+  const folderInputInline = document.getElementById("serviceFolderInline");
+  serviceUrl = (urlInputInline?.value || serviceUrl || "").trim();
+  serviceFolder = (folderInputInline?.value || serviceFolder || "").trim();
+  saveService();
+  if (!serviceUrl) {
+    setInfo("请先填写本地服务地址");
+    return;
+  }
+  setInfo("发送到本地服务中…");
+  log("popup:send_local", { count: ready.length, serviceUrl });
+  try {
+    const resp = await fetch(serviceUrl.replace(/\/+$/, "") + "/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target_dir: serviceFolder || null,
+        sub_dir: null,
+        items: ready.map((item) => ({
+          sku: item.sku,
+          title: item.title,
+          videoUrl: item.videoUrl,
+          headers: item.headers || null
+        }))
+      })
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data?.ok) {
+      throw new Error(data?.error || `请求失败: ${resp.status}`);
+    }
+    setInfo(`已发送到本地服务，成功 ${data.success}/${data.total}`);
+  } catch (e) {
+    setInfo(`本地服务错误：${e.message}`);
+  }
 }
 
 function escapeHtml(str) {

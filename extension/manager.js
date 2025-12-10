@@ -6,80 +6,63 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 async function init() {
-  await loadService();
+  await loadDirectory();
   await syncLogEndpoint();
   bindEvents();
   await refreshLogs();
+  // 定期刷新目录显示（以防在后台被更新）
+  setInterval(loadDirectory, 2000);
 }
 
 function bindEvents() {
-  document.getElementById("saveService").addEventListener("click", saveService);
-  document.getElementById("pingService").addEventListener("click", pingService);
+  document.getElementById("clearDirectory").addEventListener("click", clearDirectory);
   document.getElementById("refreshLogs").addEventListener("click", refreshLogs);
   document.getElementById("clearLogs").addEventListener("click", clearLogs);
   document.getElementById("logSearch").addEventListener("input", filterLogs);
   document.getElementById("logFilter").addEventListener("change", filterLogs);
-  document.getElementById("folderHint").addEventListener("click", showFolderHint);
   
   // 自动刷新日志（每5秒）
   setInterval(refreshLogs, 5000);
 }
 
-async function loadService() {
-  const res = await chrome.storage.local.get(["serviceUrl", "serviceFolder"]);
-  const url = res?.serviceUrl || "http://127.0.0.1:3030";
-  const folder = res?.serviceFolder || "";
-  document.getElementById("serviceUrl").value = url;
-  document.getElementById("serviceFolder").value = folder;
+async function loadDirectory() {
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "GET_DOWNLOAD_DIRECTORY" });
+    const directory = res?.directory || null;
+    const input = document.getElementById("downloadDirectory");
+    if (directory) {
+      input.value = directory;
+      input.placeholder = "";
+    } else {
+      input.value = "";
+      input.placeholder = "未设置（首次下载时会提示选择）";
+    }
+  } catch (e) {
+    console.error("Failed to load directory:", e);
+  }
 }
 
-async function saveService() {
-  const url = (document.getElementById("serviceUrl").value || "").trim();
-  let folder = (document.getElementById("serviceFolder").value || "").trim();
-  
-  // 清理路径：去除不可见字符，修正全角字符
-  if (folder) {
-    folder = folder
-      .replace(/[\u200B-\u200D\uFEFF]/g, "") // 去除零宽字符
-      .replace(/[\u3000]/g, " ") // 全角空格转半角
-      .replace(/[：]/g, ":") // 全角冒号转半角
-      .trim();
-    // 更新输入框显示清理后的值
-    document.getElementById("serviceFolder").value = folder;
-  }
-  
-  if (!url) {
-    setServiceInfo("请填写服务地址", "error");
+async function clearDirectory() {
+  if (!confirm("确定要清除下载目录设置吗？下次下载时会再次提示您选择目录。")) {
     return;
   }
   
-  await chrome.storage.local.set({
-    serviceUrl: url,
-    serviceFolder: folder
-  });
-  await syncLogEndpoint();
-  setServiceInfo("✓ 配置已保存", "success");
-  log("manager:config_saved", { url, folder: folder || "未设置" });
-}
-
-async function pingService() {
-  const url = (document.getElementById("serviceUrl").value || "").trim() || "http://127.0.0.1:3030";
-  setServiceInfo("测试中…");
-  log("manager:ping_service", { url });
   try {
-    const resp = await fetch(url.replace(/\/+$/, ""));
-    const text = await resp.text();
-    const status = resp.ok ? "success" : "error";
-    setServiceInfo(`✓ 连接成功 (${resp.status})`, status);
-    log("manager:ping_success", { status: resp.status });
+    await chrome.runtime.sendMessage({
+      type: "SET_DOWNLOAD_DIRECTORY",
+      directory: null
+    });
+    setDirectoryInfo("✓ 目录设置已清除", "success");
+    await loadDirectory();
+    log("manager:directory_cleared");
   } catch (e) {
-    setServiceInfo(`✗ 连接失败：${e.message}`, "error");
-    log("manager:ping_error", { error: e.message });
+    setDirectoryInfo("✗ 清除失败：" + e.message, "error");
+    log("manager:directory_clear_error", { error: e.message });
   }
 }
 
-function setServiceInfo(text, type = "info") {
-  const el = document.getElementById("serviceInfo");
+function setDirectoryInfo(text, type = "info") {
+  const el = document.getElementById("directoryInfo");
   el.textContent = text || "";
   el.className = "info-message";
   if (type === "success") {
@@ -95,16 +78,10 @@ function setServiceInfo(text, type = "info") {
     el.style.color = "#1e40af";
     el.style.borderColor = "#bfdbfe";
   }
-}
-
-function showFolderHint() {
-  const hints = [
-    "Windows: D:/JDDownloads",
-    "WSL Linux: /mnt/d/JDDownloads",
-    "Mac/Linux: /home/user/Downloads/JD",
-    "必须使用绝对路径"
-  ];
-  alert("文件夹路径示例：\n\n" + hints.join("\n"));
+  // 3秒后自动清除提示
+  setTimeout(() => {
+    el.textContent = "";
+  }, 3000);
 }
 
 function getLogType(event) {
@@ -273,7 +250,9 @@ async function clearLogs() {
 
 async function syncLogEndpoint() {
   try {
-    const url = (document.getElementById("serviceUrl").value || "http://127.0.0.1:3030").trim();
+    // 可选：仍然支持日志上报到Python服务（如果用户有配置的话）
+    // 这里保持默认值或从存储中读取
+    const url = "http://127.0.0.1:3030";
     await chrome.runtime.sendMessage({ 
       type: "SET_LOG_ENDPOINT", 
       url: url.replace(/\/+$/, "") + "/log" 

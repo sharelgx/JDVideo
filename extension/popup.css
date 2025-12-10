@@ -266,4 +266,15 @@ h1 {
   color: #2563eb;
 }
 
+.meta.progress {
+  color: #2563eb;
+  font-weight: 600;
+}
+
+.meta.path {
+  color: #059669;
+  font-size: 11px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
 

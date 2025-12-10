@@ -63,11 +63,20 @@ function bindPageListeners() {
       // 优先使用传入的SKU，其次使用state.pendingSku，最后才用临时SKU
       const sku = data.sku || state.pendingSku || findFirstPendingSku() || `capture-${Date.now()}`;
       if (data.url) {
+        // 获取商品信息（从已解析的items中查找）
+        const itemInfo = state.items.find(item => item.sku === sku);
+        const title = itemInfo?.title || "未命名视频";
+        const headers = data.meta?.headers || buildHeaders();
+        
         state.capturedUrls.set(sku, {
           url: data.url,
-          headers: data.meta?.headers || buildHeaders()
+          headers
         });
         log("content:captured_url", { sku, capturedSku: data.sku, pendingSku: state.pendingSku, url: data.url });
+        
+        // 方案2：不在这里自动下载，等待用户点击"批量下载"
+        // 下载逻辑在background.js中，通过监听浏览器下载事件来实现转发
+        
         // 清空pending SKU，避免下次误用
         if (state.pendingSku === sku) {
           state.pendingSku = null;
@@ -134,11 +143,42 @@ async function autoCaptureUrls(options) {
     // 确保注入脚本已加载
     ensureInject();
     await wait(500); // 等待注入脚本初始化
+    
+    // 首次解析，获取所有待捕获的SKU列表
+    const initialItems = parseItems();
+    const initialTargets = initialItems.filter((item) => !item.videoUrl && state.buttonMap.get(item.sku));
+    const initialSkus = initialTargets.map(item => item.sku);
+    
+    // 通知background进入捕获模式
+    if (initialSkus.length > 0) {
+      try {
+        await chrome.runtime.sendMessage({
+          type: "START_CAPTURE_MODE",
+          skus: initialSkus
+        });
+        log("content:capture_mode_started", { skuCount: initialSkus.length });
+      } catch (e) {
+        log("content:capture_mode_start_error", { error: e.message });
+      }
+    }
 
     do {
       const items = parseItems();
       targets = items.filter((item) => !item.videoUrl && state.buttonMap.get(item.sku));
       log("content:auto_capture_round", { round: round + 1, targets: targets.length });
+      
+      // 每轮开始时更新capturingSkus列表（可能有新的SKU）
+      if (targets.length > 0) {
+        const currentSkus = targets.map(item => item.sku);
+        try {
+          await chrome.runtime.sendMessage({
+            type: "START_CAPTURE_MODE",
+            skus: currentSkus
+          });
+        } catch (e) {
+          // ignore
+        }
+      }
       
       if (targets.length === 0) {
         log("content:auto_capture_no_targets");
@@ -220,6 +260,17 @@ async function autoCaptureUrls(options) {
     // 最终再等待一下，收集可能延迟的URL（特别是JSON响应）
     await wait(1500); // 减少到1.5秒，接近V1.0速度
     const finalItems = parseItems();
+    
+    // 通知background退出捕获模式
+    try {
+      await chrome.runtime.sendMessage({
+        type: "END_CAPTURE_MODE"
+      });
+      log("content:capture_mode_ended");
+    } catch (e) {
+      log("content:capture_mode_end_error", { error: e.message });
+    }
+    
     log("content:auto_capture_done", { success, total: finalItems.length, round });
     return {
       ok: true,
@@ -228,6 +279,14 @@ async function autoCaptureUrls(options) {
       items: finalItems
     };
   } catch (error) {
+    // 确保在异常时也退出捕获模式
+    try {
+      await chrome.runtime.sendMessage({
+        type: "END_CAPTURE_MODE"
+      });
+    } catch (e) {
+      // ignore
+    }
     log("content:auto_capture_fatal", { error: error?.message || String(error), stack: error?.stack });
     throw error;
   }

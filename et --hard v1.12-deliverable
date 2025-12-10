@@ -1,0 +1,11 @@
+[33mtag v1.11-complete[m
+Tagger: 7132699@qq.com <7132699@qq.com>
+Date:   Wed Dec 10 13:15:19 2025 +0800
+
+V1.11完整版
+
+[33mcommit a7caddc741a5353af953e913eaf3a7c95042e5e5[m[33m ([m[1;36mHEAD -> [m[1;32mv2-restore[m[33m, [m[1;33mtag: v1.11-complete[m[33m)[m
+Author: 7132699@qq.com <7132699@qq.com>
+Date:   Wed Dec 10 13:05:21 2025 +0800
+
+    feat: hide 'Auto Capture URL' button via CSS, keep all functionality intact

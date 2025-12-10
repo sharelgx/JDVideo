@@ -1,8 +1,5 @@
 let activeTabId = null;
 let currentItems = [];
-let folderPath = ""; // legacy, UI 已移除
-let serviceUrl = "http://127.0.0.1:3030";
-let serviceFolder = "";
 
 document.addEventListener("DOMContentLoaded", () => {
   init();
@@ -10,8 +7,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
 async function init() {
   await resolveActiveTab();
-  // folderPath legacy 保留，但不再从存储读取
-  await loadService();
   bindEvents();
   await refreshItems();
   chrome.runtime.onMessage.addListener(handleProgress);
@@ -29,10 +24,6 @@ function bindEvents() {
   document.getElementById("openManager").addEventListener("click", () => {
     chrome.runtime.openOptionsPage();
   });
-  const sendBtn = document.getElementById("sendToLocal");
-  if (sendBtn) {
-    sendBtn.addEventListener("click", sendToLocal);
-  }
 }
 
 async function refreshItems() {
@@ -83,10 +74,21 @@ function renderList() {
   currentItems.forEach((item) => {
     const row = document.createElement("div");
     row.className = "item";
+    
+    // 构建状态显示
+    let statusHtml = "";
+    if (item.progress) {
+      statusHtml = `<div class="meta progress">${escapeHtml(item.progress)}</div>`;
+    }
+    if (item.downloadPath) {
+      statusHtml += `<div class="meta path">路径: ${escapeHtml(item.downloadPath)}</div>`;
+    }
+    
     row.innerHTML = `
       <div class="title">${escapeHtml(item.title)}</div>
       <div class="meta">SKU：${escapeHtml(item.sku)}</div>
-      <div class="meta">地址：${item.videoUrl ? "已捕获" : "待捕获，可用自动捕获"}</div>
+      <div class="meta">地址：${item.videoUrl ? "已捕获" : "待捕获"}</div>
+      ${statusHtml}
       <div class="status ${statusClass(item.status)}">${statusLabel(item.status)}</div>
     `;
     list.appendChild(row);
@@ -105,42 +107,47 @@ function statusLabel(status) {
     ready: "可下载",
     "待捕获": "待捕获",
     downloading: "下载中",
-    success: "完成",
-    failed: "失败",
+    success: "✅ 完成",
+    failed: "❌ 失败",
     retrying: "重试中"
   };
   return map[status] || status || "";
 }
 
 async function startDownload() {
-  const ready = currentItems.filter((item) => item.videoUrl);
-  if (!ready.length) {
+  // 筛选需要下载的项：有URL且未成功下载的
+  const needDownload = currentItems.filter((item) => {
+    return item.videoUrl && item.status !== "success" && item.status !== "downloading";
+  });
+  
+  if (!needDownload.length) {
     const pending = currentItems.filter((item) => !item.videoUrl && item.hasDownloadButton);
-    if (pending.length > 0) {
-      setInfo(`还有 ${pending.length} 条待捕获，请先点击“自动捕获 URL”按钮`);
+    const allSuccess = currentItems.filter((item) => item.videoUrl && item.status === "success");
+    
+    if (allSuccess.length > 0 && allSuccess.length === currentItems.filter(i => i.videoUrl).length) {
+      setInfo(`✅ 全部已下载完成 (${allSuccess.length})`);
+    } else if (pending.length > 0) {
+      setInfo(`还有 ${pending.length} 条待捕获，请等待自动捕获完成`);
     } else {
-      setInfo("未捕获到视频地址，请先点击“解析列表”，然后点击“自动捕获 URL”");
+      setInfo("没有需要下载的项");
     }
-    log("popup:download_no_urls", { total: currentItems.length, ready: ready.length, pending: pending.length });
+    log("popup:download_no_items", { total: currentItems.length, needDownload: needDownload.length, pending: pending.length });
     return;
   }
   
-  // 检查是否配置了本地服务，如果有则优先使用本地服务
-  const urlInputInline = document.getElementById("serviceUrlInline");
-  const folderInputInline = document.getElementById("serviceFolderInline");
-  const configuredUrl = (urlInputInline?.value || serviceUrl || "").trim();
-  if (configuredUrl) {
-    setInfo("检测到本地服务配置，使用本地服务下载…");
-    await sendToLocal();
-    return;
-  }
+  setInfo(`开始下载 ${needDownload.length} 条...`);
+  log("popup:start_download", { count: needDownload.length });
   
-  // 否则使用浏览器默认下载
-  setInfo(`提交下载 ${ready.length} 条（浏览器默认目录）`);
-  log("popup:start_download", { count: ready.length });
+  // 通过background触发下载
   await chrome.runtime.sendMessage({
     type: "START_DOWNLOADS",
-    items: ready
+    items: needDownload.map(item => ({
+      sku: item.sku,
+      title: item.title,
+      videoUrl: item.videoUrl,
+      headers: item.headers || {}
+    })),
+    options: {}
   });
 }
 
@@ -148,10 +155,39 @@ function handleProgress(message) {
   if (message?.type !== "DOWNLOAD_PROGRESS") return;
   const target = currentItems.find((item) => item.sku === message.sku);
   if (target) {
+    // 更新状态和进度信息
     target.status = message.stage || target.status;
     target.videoUrl = target.videoUrl || message.videoUrl;
+    
+    // 保存进度信息
+    if (message.stage === "downloading") {
+      target.progress = "下载中...";
+    } else if (message.stage === "success") {
+      target.progress = "下载成功";
+    } else if (message.stage === "failed") {
+      target.progress = `失败: ${message.error || "未知错误"}`;
+    } else if (message.stage === "retrying") {
+      target.progress = `重试中 (${message.attempt || 0})...`;
+    }
+    
+    target.downloadError = message.error || null;
     renderList();
     updateStats();
+    
+    // 更新提示信息
+    if (message.stage === "success") {
+      const successCount = currentItems.filter(i => i.status === "success").length;
+      const total = currentItems.filter(i => i.videoUrl).length;
+      if (successCount === total) {
+        setInfo(`✅ 全部下载完成 (${successCount}/${total})`);
+      } else {
+        setInfo(`下载中... 已完成 ${successCount}/${total}`);
+      }
+    } else if (message.stage === "failed") {
+      const failed = currentItems.filter(i => i.status === "failed").length;
+      const total = currentItems.filter(i => i.videoUrl).length;
+      setInfo(`⚠️ 部分下载失败 (${failed}/${total})`);
+    }
   }
 }
 
@@ -284,78 +320,6 @@ function updateStats() {
   if (missingEl) missingEl.textContent = missing;
 }
 
-async function loadService() {
-  try {
-    const res = await chrome.storage.local.get(["serviceUrl", "serviceFolder"]);
-    serviceUrl = res?.serviceUrl || "http://127.0.0.1:3030";
-    serviceFolder = res?.serviceFolder || "";
-    const urlInputInline = document.getElementById("serviceUrlInline");
-    const folderInputInline = document.getElementById("serviceFolderInline");
-    if (urlInputInline) urlInputInline.value = serviceUrl;
-    if (folderInputInline) folderInputInline.value = serviceFolder;
-  } catch (e) {
-    // ignore
-  }
-}
-
-function saveService() {
-  chrome.storage.local.set({
-    serviceUrl: serviceUrl || "",
-    serviceFolder: serviceFolder || ""
-  });
-}
-
-async function sendToLocal() {
-  const ready = currentItems.filter((item) => item.videoUrl);
-  if (!ready.length) {
-    setInfo("没有可发送的条目（未捕获到视频地址）");
-    return;
-  }
-  const urlInputInline = document.getElementById("serviceUrlInline");
-  const folderInputInline = document.getElementById("serviceFolderInline");
-  serviceUrl = (urlInputInline?.value || serviceUrl || "").trim();
-  serviceFolder = (folderInputInline?.value || serviceFolder || "").trim();
-  
-  // 清理路径：去除不可见字符，修正全角字符
-  if (serviceFolder) {
-    serviceFolder = serviceFolder
-      .replace(/[\u200B-\u200D\uFEFF]/g, "") // 去除零宽字符
-      .replace(/[\u3000]/g, " ") // 全角空格转半角
-      .replace(/[：]/g, ":") // 全角冒号转半角
-      .trim();
-  }
-  
-  saveService();
-  if (!serviceUrl) {
-    setInfo("请先填写本地服务地址");
-    return;
-  }
-  setInfo("发送到本地服务中…");
-  log("popup:send_local", { count: ready.length, serviceUrl, target_dir: serviceFolder });
-  try {
-    const resp = await fetch(serviceUrl.replace(/\/+$/, "") + "/download", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        target_dir: serviceFolder || null,
-        sub_dir: null,
-        items: ready.map((item) => ({
-          sku: item.sku,
-          title: item.title,
-          videoUrl: item.videoUrl,
-          headers: item.headers || null
-        }))
-      })
-    });
-    const data = await resp.json();
-    if (!resp.ok || !data?.ok) {
-      throw new Error(data?.error || `请求失败: ${resp.status}`);
-    }
-    setInfo(`已发送到本地服务，成功 ${data.success}/${data.total}`);
-  } catch (e) {
-    setInfo(`本地服务错误：${e.message}`);
-  }
-}
 
 function escapeHtml(str) {
   return (str || "")

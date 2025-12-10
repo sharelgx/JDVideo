@@ -23,44 +23,37 @@
           </svg>
           下载目录设置
         </h2>
+        
         <div class="form-group">
           <label>
-            <span>本地下载服务地址</span>
-            <small>确保Python服务正在运行</small>
+            <span>当前下载目录</span>
+            <small>首次下载时会提示您选择目录，选择后会自动保存</small>
           </label>
-          <input id="serviceUrl" type="text" placeholder="http://127.0.0.1:3030" />
-        </div>
-
-        <div class="form-group">
-          <label>
-            <span>下载文件夹路径</span>
-            <small>绝对路径，示例：Windows D:/JDDownloads，Linux/Mac /home/user/Downloads</small>
-          </label>
-          <div class="folder-input-group">
-            <input id="serviceFolder" type="text" placeholder="例如：D:/JDDownloads 或 /mnt/d/JDDownloads" />
-            <button id="folderHint" class="btn-icon" title="路径提示">
+          <div class="folder-display">
+            <input id="downloadDirectory" type="text" readonly placeholder="未设置（首次下载时会提示选择）" />
+            <button id="clearDirectory" class="btn-icon" title="清除目录选择">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M8 1a7 7 0 100 14A7 7 0 008 1zM7 4h2v2H7V4zm0 4h2v4H7V8z"/>
+                <path d="M2.146 2.854a.5.5 0 11.708-.708L8 7.293l5.146-5.147a.5.5 0 01.708.708L8.707 8l5.147 5.146a.5.5 0 01-.708.708L8 8.707l-5.146 5.147a.5.5 0 01-.708-.708L7.293 8 2.146 2.854z"/>
               </svg>
             </button>
           </div>
         </div>
 
-        <div class="actions">
-          <button id="saveService" class="btn primary">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M13 3L5 11l-3-3 1.414-1.414L5 8.172l7.586-7.586L13 3z"/>
-            </svg>
-            保存配置
-          </button>
-          <button id="pingService" class="btn outline">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M8 0a8 8 0 100 16A8 8 0 008 0zM7 12V6h2v6H7zm0-8h2v2H7V4z"/>
-            </svg>
-            测试连接
-          </button>
+        <div class="info-box">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 1a7 7 0 100 14A7 7 0 008 1zM7 4h2v2H7V4zm0 4h2v4H7V8z"/>
+          </svg>
+          <div>
+            <strong>说明：</strong>
+            <ul>
+              <li>首次点击"批量下载"时会弹出目录选择对话框</li>
+              <li>选择的目录会被自动保存，后续下载将直接使用该目录</li>
+              <li>如需更改目录，请先清除当前设置</li>
+            </ul>
+          </div>
         </div>
-        <div id="serviceInfo" class="info-message"></div>
+
+        <div id="directoryInfo" class="info-message"></div>
       </section>
 
       <section class="card">

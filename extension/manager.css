@@ -129,6 +129,58 @@ input[type="text"]:focus {
   flex: 1;
 }
 
+.folder-display {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.folder-display input {
+  flex: 1;
+  background: #f8fafc;
+  cursor: not-allowed;
+}
+
+.folder-display input:focus {
+  cursor: not-allowed;
+}
+
+.info-box {
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 12px;
+  padding: 16px;
+  margin-top: 20px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.info-box svg {
+  flex-shrink: 0;
+  color: #0284c7;
+  margin-top: 2px;
+}
+
+.info-box strong {
+  display: block;
+  color: #0c4a6e;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.info-box ul {
+  margin: 0;
+  padding-left: 20px;
+  color: #075985;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.info-box li {
+  margin-bottom: 4px;
+}
+
 .btn-icon {
   background: #f1f5f9;
   border: 2px solid #e2e8f0;

@@ -23,7 +23,6 @@ async function resolveActiveTab() {
 function bindEvents() {
   document.getElementById("refresh").addEventListener("click", refreshItems);
   document.getElementById("downloadAll").addEventListener("click", startDownload);
-  document.getElementById("autoCapture").addEventListener("click", autoCapture);
 }
 
 async function refreshItems() {
@@ -43,10 +42,6 @@ async function refreshItems() {
     updateStats();
     const missing = currentItems.filter((i) => !i.videoUrl).length;
     setInfo(`解析完成，共 ${currentItems.length} 条${missing ? `，待捕获 ${missing}` : ""}`);
-    if (missing > 0) {
-      // 自动尝试捕获，减少人工操作
-      autoCapture();
-    }
   } catch (error) {
     setInfo("解析失败，请确认已在直播讲解页");
   }
@@ -124,31 +119,7 @@ function setInfo(text) {
 }
 
 async function autoCapture() {
-  if (!activeTabId) {
-    setInfo("未找到活动标签页");
-    return;
-  }
-  setInfo("自动捕获中…");
-  log("popup:auto_capture_click");
-  try {
-    const res = await chrome.tabs.sendMessage(activeTabId, {
-      type: "AUTO_CAPTURE_URLS",
-      options: { delayMs: 1800, retries: 2 }
-    });
-    if (res?.error) {
-      setInfo(`捕获失败：${res.error}`);
-      return;
-    }
-    currentItems = (res?.items || []).map((item) => ({
-      ...item,
-      status: item.videoUrl ? "ready" : "待捕获"
-    }));
-    renderList();
-    updateStats();
-    setInfo(`自动捕获完成，成功 ${res?.successCount || 0}/${res?.totalTried || 0}`);
-  } catch (error) {
-    setInfo("自动捕获异常，请重试");
-  }
+  // v1 无自动捕获
 }
 
 function updateStats() {

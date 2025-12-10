@@ -12,36 +12,98 @@
         <div>
           <p class="eyebrow">JD Live</p>
           <h1>后台管理</h1>
-          <p class="subtitle">配置本地下载服务与日志查看</p>
+          <p class="subtitle">配置下载目录与查看操作日志</p>
         </div>
       </header>
 
       <section class="card">
-        <h2>下载目录设置</h2>
-        <label>本地下载服务地址</label>
-        <input id="serviceUrl" placeholder="http://127.0.0.1:3030" />
+        <h2>
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+            <path d="M3 3h14v14H3V3zm1 1v12h12V4H4zm2 1h8v1H6V5zm0 2h8v1H6V7zm0 2h8v1H6V9zm0 2h5v1H6v-1z"/>
+          </svg>
+          下载目录设置
+        </h2>
+        <div class="form-group">
+          <label>
+            <span>本地下载服务地址</span>
+            <small>确保Python服务正在运行</small>
+          </label>
+          <input id="serviceUrl" type="text" placeholder="http://127.0.0.1:3030" />
+        </div>
 
-        <label>目标目录（绝对路径）</label>
-        <input id="serviceFolder" placeholder="如：D:/JDDownloads" />
+        <div class="form-group">
+          <label>
+            <span>下载文件夹路径</span>
+            <small>绝对路径，示例：Windows D:/JDDownloads，Linux/Mac /home/user/Downloads</small>
+          </label>
+          <div class="folder-input-group">
+            <input id="serviceFolder" type="text" placeholder="例如：D:/JDDownloads 或 /mnt/d/JDDownloads" />
+            <button id="folderHint" class="btn-icon" title="提示">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 1a7 7 0 100 14A7 7 0 008 1zM7 4h2v2H7V4zm0 4h2v4H7V8z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
 
         <div class="actions">
-          <button id="saveService" class="btn primary">保存</button>
-          <button id="pingService" class="btn outline">测试连接</button>
+          <button id="saveService" class="btn primary">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M13 3L5 11l-3-3 1.414-1.414L5 8.172l7.586-7.586L13 3z"/>
+            </svg>
+            保存配置
+          </button>
+          <button id="pingService" class="btn outline">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 0a8 8 0 100 16A8 8 0 008 0zM7 12V6h2v6H7zm0-8h2v2H7V4z"/>
+            </svg>
+            测试连接
+          </button>
         </div>
-        <div id="serviceInfo" class="muted"></div>
+        <div id="serviceInfo" class="info-message"></div>
       </section>
 
       <section class="card">
-        <h2>日志</h2>
-        <div class="actions">
-          <button id="refreshLogs" class="btn outline">刷新日志</button>
-          <button id="clearLogs" class="btn ghost">清空本地缓存</button>
+        <h2>
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+            <path d="M10 2a8 8 0 100 16 8 8 0 000-16zM9 5h2v6H9V5zm0 7h2v2H9v-2z"/>
+          </svg>
+          操作日志
+          <span id="logCount" class="badge">0</span>
+        </h2>
+        
+        <div class="log-controls">
+          <div class="search-group">
+            <input id="logSearch" type="text" placeholder="搜索日志..." />
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M11.742 10.344a6.5 6.5 0 10-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 001.415-1.414l-3.85-3.85a1.007 1.007 0 00-.115-.1zM12 6.5a5.5 5.5 0 11-11 0 5.5 5.5 0 0111 0z"/>
+            </svg>
+          </div>
+          <select id="logFilter">
+            <option value="">全部事件</option>
+            <option value="parse">解析操作</option>
+            <option value="capture">捕获操作</option>
+            <option value="download">下载操作</option>
+            <option value="popup">弹窗操作</option>
+            <option value="content">内容脚本</option>
+            <option value="inject">注入脚本</option>
+            <option value="bg">后台脚本</option>
+          </select>
+          <button id="refreshLogs" class="btn outline">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M11.534 7h3.932a.25.25 0 01.192.41l-1.966 2.36a.25.25 0 01-.384 0l-1.966-2.36a.25.25 0 01.192-.41zm-11 2h3.932a.25.25 0 00.192-.41L2.692 6.23a.25.25 0 00-.384 0L.342 8.59A.25.25 0 00.534 9z"/>
+              <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 11-.771-.636A6.002 6.002 0 0113.917 7H12.9A5.002 5.002 0 008 3zM3.1 9a5.002 5.002 0 008.757 2.182.5.5 0 11.771.636A6.002 6.002 0 012.083 9H3.1z"/>
+            </svg>
+            刷新
+          </button>
+          <button id="clearLogs" class="btn ghost">清空视图</button>
         </div>
+
         <div id="logList" class="log-list"></div>
+        <div id="logEmpty" class="empty-state">暂无日志</div>
       </section>
     </div>
 
     <script src="manager.js"></script>
   </body>
 </html>
-

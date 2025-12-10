@@ -1,0 +1,270 @@
+let activeTabId = null;
+let currentItems = [];
+let folderPath = ""; // legacy, UI 已移除
+let serviceUrl = "";
+let serviceFolder = "";
+let logEndpoint = "http://127.0.0.1:3030/log";
+
+document.addEventListener("DOMContentLoaded", () => {
+  init();
+});
+
+async function init() {
+  await resolveActiveTab();
+  // folderPath legacy 保留，但不再从存储读取
+  await loadService();
+  await syncLogEndpoint();
+  bindEvents();
+  await refreshItems();
+  chrome.runtime.onMessage.addListener(handleProgress);
+}
+
+async function resolveActiveTab() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  activeTabId = tabs?.[0]?.id || null;
+}
+
+function bindEvents() {
+  document.getElementById("refresh").addEventListener("click", refreshItems);
+  document.getElementById("downloadAll").addEventListener("click", startDownload);
+  document.getElementById("autoCapture").addEventListener("click", autoCapture);
+  const serviceUrlInput = document.getElementById("serviceUrl");
+  const serviceFolderInput = document.getElementById("serviceFolder");
+  serviceUrlInput.addEventListener("input", (e) => {
+    serviceUrl = (e.target.value || "").trim();
+    saveService();
+  });
+  serviceFolderInput.addEventListener("input", (e) => {
+    serviceFolder = (e.target.value || "").trim();
+    saveService();
+  });
+  document.getElementById("sendToLocal").addEventListener("click", sendToLocal);
+}
+
+async function refreshItems() {
+  if (!activeTabId) {
+    setInfo("未找到活动标签页");
+    return;
+  }
+  setInfo("解析中…");
+  log("popup:parse_click");
+  try {
+    const res = await chrome.tabs.sendMessage(activeTabId, { type: "PARSE_ITEMS" });
+    currentItems = (res?.items || []).map((item) => ({
+      ...item,
+      status: item.videoUrl ? "ready" : "待捕获"
+    }));
+    renderList();
+    updateStats();
+    const missing = currentItems.filter((i) => !i.videoUrl).length;
+    setInfo(`解析完成，共 ${currentItems.length} 条${missing ? `，待捕获 ${missing}` : ""}`);
+    if (missing > 0) {
+      // 自动尝试捕获，减少人工操作
+      autoCapture();
+    }
+  } catch (error) {
+    setInfo("解析失败，请确认已在直播讲解页");
+  }
+}
+
+function renderList() {
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+  if (!currentItems.length) {
+    list.textContent = "未找到商品列表";
+    return;
+  }
+
+  currentItems.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "item";
+    row.innerHTML = `
+      <div class="title">${escapeHtml(item.title)}</div>
+      <div class="meta">SKU：${escapeHtml(item.sku)}</div>
+      <div class="meta">地址：${item.videoUrl ? "已捕获" : "待捕获，可用自动捕获"}</div>
+      <div class="status ${statusClass(item.status)}">${statusLabel(item.status)}</div>
+    `;
+    list.appendChild(row);
+  });
+}
+
+function statusClass(status) {
+  if (status === "failed") return "failed";
+  if (status === "success") return "success";
+  if (status === "downloading") return "downloading";
+  return "";
+}
+
+function statusLabel(status) {
+  const map = {
+    ready: "可下载",
+    "待捕获": "待捕获",
+    downloading: "下载中",
+    success: "完成",
+    failed: "失败",
+    retrying: "重试中"
+  };
+  return map[status] || status || "";
+}
+
+async function startDownload() {
+  const ready = currentItems.filter((item) => item.videoUrl);
+  if (!ready.length) {
+    setInfo("未捕获到视频地址，请在页面点击“下载”后重试");
+    log("popup:download_no_urls");
+    return;
+  }
+  setInfo(`提交下载 ${ready.length} 条`);
+  log("popup:start_download", { count: ready.length });
+  await chrome.runtime.sendMessage({
+    type: "START_DOWNLOADS",
+    items: ready
+  });
+}
+
+function handleProgress(message) {
+  if (message?.type !== "DOWNLOAD_PROGRESS") return;
+  const target = currentItems.find((item) => item.sku === message.sku);
+  if (target) {
+    target.status = message.stage || target.status;
+    target.videoUrl = target.videoUrl || message.videoUrl;
+    renderList();
+    updateStats();
+  }
+}
+
+function setInfo(text) {
+  const info = document.getElementById("info");
+  info.textContent = text || "";
+}
+
+async function autoCapture() {
+  if (!activeTabId) {
+    setInfo("未找到活动标签页");
+    return;
+  }
+  setInfo("自动捕获中…");
+  log("popup:auto_capture_click");
+  try {
+    const res = await chrome.tabs.sendMessage(activeTabId, {
+      type: "AUTO_CAPTURE_URLS",
+      options: { delayMs: 1800, retries: 2 }
+    });
+    if (res?.error) {
+      setInfo(`捕获失败：${res.error}`);
+      return;
+    }
+    currentItems = (res?.items || []).map((item) => ({
+      ...item,
+      status: item.videoUrl ? "ready" : "待捕获"
+    }));
+    renderList();
+    updateStats();
+    setInfo(`自动捕获完成，成功 ${res?.successCount || 0}/${res?.totalTried || 0}`);
+  } catch (error) {
+    setInfo("自动捕获异常，请重试");
+  }
+}
+
+function updateStats() {
+  const total = currentItems.length;
+  const ready = currentItems.filter((i) => i.videoUrl).length;
+  const missing = total - ready;
+  const totalEl = document.getElementById("stat-total");
+  const readyEl = document.getElementById("stat-ready");
+  const missingEl = document.getElementById("stat-missing");
+  if (totalEl) totalEl.textContent = total;
+  if (readyEl) readyEl.textContent = ready;
+  if (missingEl) missingEl.textContent = missing;
+}
+
+async function loadService() {
+  try {
+    const res = await chrome.storage.local.get(["serviceUrl", "serviceFolder", "logEndpoint"]);
+    serviceUrl = res?.serviceUrl || "http://127.0.0.1:3030";
+    serviceFolder = res?.serviceFolder || "";
+    logEndpoint = res?.logEndpoint || "http://127.0.0.1:3030/log";
+    const urlInput = document.getElementById("serviceUrl");
+    const folderInput = document.getElementById("serviceFolder");
+    if (urlInput) urlInput.value = serviceUrl;
+    if (folderInput) folderInput.value = serviceFolder;
+  } catch (e) {
+    // ignore
+  }
+}
+
+function saveService() {
+  chrome.storage.local.set({
+    serviceUrl: serviceUrl || "",
+    serviceFolder: serviceFolder || "",
+    logEndpoint: logEndpoint || "http://127.0.0.1:3030/log"
+  });
+}
+
+async function syncLogEndpoint() {
+  try {
+    await chrome.runtime.sendMessage({ type: "SET_LOG_ENDPOINT", url: logEndpoint });
+  } catch (e) {
+    // ignore
+  }
+}
+
+async function sendToLocal() {
+  const ready = currentItems.filter((item) => item.videoUrl);
+  if (!ready.length) {
+    setInfo("没有可发送的条目（未捕获到视频地址）");
+    return;
+  }
+  if (!serviceUrl) {
+    setInfo("请先填写本地服务地址");
+    return;
+  }
+  setInfo("发送到本地服务中…");
+  log("popup:send_local", { count: ready.length, serviceUrl });
+  try {
+    const resp = await fetch(serviceUrl.replace(/\/+$/, "") + "/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target_dir: serviceFolder || null,
+        sub_dir: null,
+        items: ready.map((item) => ({
+          sku: item.sku,
+          title: item.title,
+          videoUrl: item.videoUrl,
+          headers: item.headers || null
+        }))
+      })
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data?.ok) {
+      throw new Error(data?.error || `请求失败: ${resp.status}`);
+    }
+    setInfo(`已发送到本地服务，成功 ${data.success}/${data.total}`);
+  } catch (e) {
+    setInfo(`本地服务错误：${e.message}`);
+  }
+}
+
+function escapeHtml(str) {
+  return (str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function log(event, data) {
+  chrome.runtime.sendMessage(
+    {
+      type: "LOG",
+      origin: "popup",
+      event,
+      data
+    },
+    () => {}
+  );
+}
+
+

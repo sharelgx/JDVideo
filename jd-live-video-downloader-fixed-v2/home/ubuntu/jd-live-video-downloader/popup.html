@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>京东直播视频下载</title>
+    <style>
+        body { font-family: Arial, sans-serif; width: 400px; padding: 10px; }
+        h3 { margin-top: 0; }
+        .controls { margin-bottom: 10px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        .controls button { margin-right: 5px; padding: 8px 12px; cursor: pointer; }
+        .list-container { max-height: 300px; overflow-y: auto; border: 1px solid #ddd; padding: 5px; }
+        .item { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px dotted #eee; font-size: 12px; }
+        .item:last-child { border-bottom: none; }
+        .item-info { flex-grow: 1; margin-right: 10px; }
+        .item-title { font-weight: bold; }
+        .item-sku { color: #666; }
+        .item-status { font-style: italic; color: blue; }
+        .item-actions button { font-size: 10px; padding: 3px 6px; margin-left: 5px; }
+        .config-section { margin-top: 15px; padding-top: 10px; border-top: 1px solid #eee; }
+        .config-section label { display: block; margin-bottom: 5px; font-size: 12px; }
+        .config-section input { width: 50px; margin-right: 10px; }
+        .config-section button { margin-top: 5px; }
+    </style>
+</head>
+<body>
+    <h3>京东直播视频下载器</h3>
+    <div class="controls">
+        <button id="parseList">解析列表</button>
+        <button id="startBatchDownload">批量下载</button>
+        <button id="retryFailed">重试失败项</button>
+    </div>
+
+    <div class="list-container" id="videoList">
+        <!-- 视频列表将在这里动态加载 -->
+        <p id="loadingStatus">请先打开一个京东直播讲解页面...</p>
+    </div>
+
+    <div class="config-section">
+        <h4>配置项</h4>
+        <label>
+            并发上限 (默认 3):
+            <input type="number" id="concurrencyInput" min="1" value="3">
+        </label>
+        <label>
+            重试次数 (默认 2):
+            <input type="number" id="retriesInput" min="0" value="2">
+        </label>
+        <label>
+            命名模板 (SKUID_[标题名].mp4):
+            <input type="text" id="namingTemplateInput" style="width: 250px;" value="SKUID_[标题名].mp4">
+        </label>
+        <button id="saveConfig">保存配置</button>
+        <p id="configStatus" style="font-size: 10px; color: green;"></p>
+    </div>
+
+    <script src="scripts/popup.js"></script>
+</body>
+</html>

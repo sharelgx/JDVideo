@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JD Live Video Downloader</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">JD Live</p>
+          <h1>直播视频下载器</h1>
+          <p class="subtitle">自动解析 SKU / 标题，捕获真实视频地址并批量下载</p>
+        </div>
+        <div class="pill online">已登录浏览器</div>
+      </header>
+
+      <section class="toolbar">
+        <button id="refresh" class="btn primary">解析列表</button>
+        <button id="autoCapture" class="btn outline">自动捕获 URL</button>
+        <button id="downloadAll" class="btn accent">批量下载</button>
+        <span id="info" class="muted"></span>
+      </section>
+
+      <section class="folder-row">
+        <label for="serviceUrl">本地下载服务（Python）地址</label>
+        <input id="serviceUrl" type="text" placeholder="http://127.0.0.1:3030" />
+        <label for="serviceFolder">本地服务目标目录（绝对路径，可留空使用服务默认）</label>
+        <input id="serviceFolder" type="text" placeholder="如：D:/JDDownloads" />
+        <div class="service-actions">
+          <button id="sendToLocal" class="btn primary">发送到本地服务下载</button>
+        </div>
+      </section>
+
+      <section class="stats">
+        <div class="stat">
+          <div class="label">列表</div>
+          <div class="value" id="stat-total">0</div>
+        </div>
+        <div class="stat">
+          <div class="label">已捕获</div>
+          <div class="value good" id="stat-ready">0</div>
+        </div>
+        <div class="stat">
+          <div class="label">待捕获</div>
+          <div class="value warn" id="stat-missing">0</div>
+        </div>
+      </section>
+
+      <section id="list" class="card-list"></section>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>
+
+

@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "JD Live Video Downloader",
+  "description": "在京东直播讲解页解析并下载商品视频，命名为 SKUID_[标题名].mp4。",
+  "version": "0.1.0",
+  "permissions": [
+    "downloads",
+    "scripting",
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://jlive.jd.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "JD Live Video Downloader",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://jlive.jd.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "inject.js"
+      ],
+      "matches": [
+        "https://jlive.jd.com/*"
+      ]
+    }
+  ]
+}
+

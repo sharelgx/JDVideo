@@ -154,7 +154,7 @@ async function autoCapture() {
   try {
     const res = await chrome.tabs.sendMessage(activeTabId, {
       type: "AUTO_CAPTURE_URLS",
-      options: { delayMs: 3000, retries: 4 } // 增加等待时间和重试次数，确保能捕获到URL
+      options: { delayMs: 2200, retries: 3 } // 使用V1.0稳定版的速度参数
     });
     
     if (!res) {

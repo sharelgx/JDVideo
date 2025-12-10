@@ -121,10 +121,10 @@ function parseItems() {
 
 async function autoCaptureUrls(options) {
   try {
-    // 增加等待时间和重试次数，确保能捕获到URL
-    const delay = Number(options.delayMs) || 3000; // 增加到3秒
-    const retries = Number(options.retries) || 4; // 增加到4次
-    const maxRounds = 3; // 增加到3轮
+    // 使用V1.0稳定版的速度参数，但保留改进的SKU绑定逻辑
+    const delay = Number(options.delayMs) || 2200; // 恢复为V1.0的2.2秒
+    const retries = Number(options.retries) || 3; // 恢复为V1.0的3次
+    const maxRounds = 2; // 恢复为V1.0的2轮
     let round = 0;
     let success = 0;
     let targets = [];
@@ -153,21 +153,19 @@ async function autoCaptureUrls(options) {
             continue;
           }
           
-          // 确保pending SKU已设置
-          markPendingSku(item.sku);
-          await wait(100); // 给一点时间让pending SKU设置生效
-          
           let captured = false;
           for (let attempt = 0; attempt <= retries; attempt++) {
             try {
-              // 每次尝试前重新设置pending SKU
+              // 每次尝试前重新设置pending SKU，确保注入脚本收到
               markPendingSku(item.sku);
+              await wait(150); // 给足够时间让pending SKU设置到注入脚本
               
               // 点击按钮
+              log("content:btn_click", { sku: item.sku, attempt: attempt + 1 });
               dispatchHumanClick(btn);
               
-              // 分段等待，每段检查一次是否捕获到
-              const checkInterval = Math.max(600, delay / 4);
+              // 分段等待并检查，但减少检查间隔以提高响应速度
+              const checkInterval = 400;
               let waited = 0;
               while (waited < delay && !captured) {
                 await wait(checkInterval);
@@ -183,7 +181,7 @@ async function autoCaptureUrls(options) {
               
               // 最终检查一次（JSON响应可能需要更长时间）
               if (!captured) {
-                await wait(800);
+                await wait(500);
                 if (state.capturedUrls.get(item.sku)?.url) {
                   captured = true;
                   success += 1;
@@ -196,7 +194,7 @@ async function autoCaptureUrls(options) {
               
               // 如果还没捕获到，等待一段时间再重试
               if (attempt < retries) {
-                await wait(600);
+                await wait(400);
               }
             } catch (e) {
               log("content:auto_capture_attempt_error", { sku: item.sku, attempt: attempt + 1, error: e.message });
@@ -213,14 +211,14 @@ async function autoCaptureUrls(options) {
       
       // 轮次之间等待，让网络请求有时间完成
       if (targets.length > 0 && round < maxRounds - 1) {
-        await wait(1000);
+        await wait(800);
       }
       
       round += 1;
     } while (targets.length && round < maxRounds);
 
     // 最终再等待一下，收集可能延迟的URL（特别是JSON响应）
-    await wait(2000);
+    await wait(1500); // 减少到1.5秒，接近V1.0速度
     const finalItems = parseItems();
     log("content:auto_capture_done", { success, total: finalItems.length, round });
     return {

@@ -50,7 +50,7 @@
       if (state.pendingSku === currentSku) {
         state.pendingSku = null;
       }
-    }, 1500); // 延迟1.5秒清空，给JSON响应足够时间
+    }, 1200); // 延迟1.2秒清空，给JSON响应足够时间
     
     window.postMessage(payload, "*");
   };

@@ -24,6 +24,9 @@ function bindEvents() {
   document.getElementById("refresh").addEventListener("click", refreshItems);
   document.getElementById("downloadAll").addEventListener("click", startDownload);
   document.getElementById("autoCapture").addEventListener("click", autoCapture);
+  document.getElementById("openManager").addEventListener("click", () => {
+    chrome.runtime.openOptionsPage();
+  });
 }
 
 async function refreshItems() {
@@ -133,7 +136,7 @@ async function autoCapture() {
   try {
     const res = await chrome.tabs.sendMessage(activeTabId, {
       type: "AUTO_CAPTURE_URLS",
-      options: { delayMs: 1800, retries: 2 }
+      options: { delayMs: 2200, retries: 3 }
     });
     if (res?.error) {
       setInfo(`捕获失败：${res.error}`);

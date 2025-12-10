@@ -100,39 +100,44 @@ function parseItems() {
 }
 
 async function autoCaptureUrls(options) {
-  const delay = Number(options.delayMs) || 1800;
-  const retries = Number(options.retries) || 2;
-  const items = parseItems();
-  const targets = items.filter((item) => !item.videoUrl && state.buttonMap.get(item.sku));
+  const delay = Number(options.delayMs) || 2200;
+  const retries = Number(options.retries) || 3;
+  const maxRounds = 2;
+  let round = 0;
   let success = 0;
-  log("content:auto_capture_start", { targets: targets.length, delay, retries });
+  let targets = [];
 
-  for (const item of targets) {
-    const btn = state.buttonMap.get(item.sku);
-    if (!btn) continue;
-    let captured = false;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      markPendingSku(item.sku);
-      dispatchHumanClick(btn);
-      await wait(delay);
-      if (state.capturedUrls.get(item.sku)?.url) {
-        captured = true;
-        success += 1;
-        break;
+  do {
+    const items = parseItems();
+    targets = items.filter((item) => !item.videoUrl && state.buttonMap.get(item.sku));
+    log("content:auto_capture_round", { round: round + 1, targets: targets.length, delay, retries });
+    for (const item of targets) {
+      const btn = state.buttonMap.get(item.sku);
+      if (!btn) continue;
+      let captured = false;
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        markPendingSku(item.sku);
+        dispatchHumanClick(btn);
+        await wait(delay);
+        if (state.capturedUrls.get(item.sku)?.url) {
+          captured = true;
+          success += 1;
+          break;
+        }
+      }
+      if (!captured) {
+        log("content:auto_capture_miss", { sku: item.sku });
       }
     }
-    if (!captured) {
-      // continue to next; status will remain missing
-      log("content:auto_capture_miss", { sku: item.sku });
-    }
-  }
+    round += 1;
+  } while (targets.length && round < maxRounds);
 
   const finalItems = parseItems();
-  log("content:auto_capture_done", { success, tried: targets.length });
+  log("content:auto_capture_done", { success, tried: finalItems.length });
   return {
     ok: true,
     successCount: success,
-    totalTried: targets.length,
+    totalTried: finalItems.length,
     items: finalItems
   };
 }

@@ -55,6 +55,10 @@ h1 {
   flex-wrap: wrap;
 }
 
+.toolbar #openManager {
+  margin-left: auto;
+}
+
 .folder-row {
   display: flex;
   flex-direction: column;

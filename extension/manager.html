@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>后台管理 - JD Live Downloader</title>
+    <link rel="stylesheet" href="manager.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <div>
+          <p class="eyebrow">JD Live</p>
+          <h1>后台管理</h1>
+          <p class="subtitle">配置本地下载服务与日志查看</p>
+        </div>
+      </header>
+
+      <section class="card">
+        <h2>下载目录设置</h2>
+        <label>本地下载服务地址</label>
+        <input id="serviceUrl" placeholder="http://127.0.0.1:3030" />
+
+        <label>目标目录（绝对路径）</label>
+        <input id="serviceFolder" placeholder="如：D:/JDDownloads" />
+
+        <div class="actions">
+          <button id="saveService" class="btn primary">保存</button>
+          <button id="pingService" class="btn outline">测试连接</button>
+        </div>
+        <div id="serviceInfo" class="muted"></div>
+      </section>
+
+      <section class="card">
+        <h2>日志</h2>
+        <div class="actions">
+          <button id="refreshLogs" class="btn outline">刷新日志</button>
+          <button id="clearLogs" class="btn ghost">清空本地缓存</button>
+        </div>
+        <div id="logList" class="log-list"></div>
+      </section>
+    </div>
+
+    <script src="manager.js"></script>
+  </body>
+</html>
+

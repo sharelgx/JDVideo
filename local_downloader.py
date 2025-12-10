@@ -17,6 +17,7 @@ import json
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
 
@@ -40,7 +41,52 @@ def ensure_dir(path: str):
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
 
-def download_file(url: str, path: str, retry: int = 2, headers: dict | None = None):
+def normalize_root(path: str, fallback_root: str) -> str:
+    """规范化根目录，修正全角冒号/意外相对路径，确保为绝对路径。"""
+    if not path:
+        return fallback_root
+    # 修正全角冒号等情况
+    path = path.replace("：", ":")
+    # 统一路径分隔符
+    path = path.replace("\\", "/")
+    # 去除首尾空格和斜杠
+    path = path.strip().strip("/")
+    
+    # 检测Windows驱动器路径（如 D:/xxx 或 D:xxx）
+    is_windows_path = False
+    drive_letter = None
+    if len(path) >= 2 and path[1] == ":":
+        is_windows_path = True
+        drive_letter = path[0].upper()
+        if len(path) == 2:
+            path = path + "/"
+        else:
+            path = path[2:].lstrip("/")
+    
+    # 如果在WSL/Unix环境下检测到Windows路径，转换为/mnt/drive格式
+    if is_windows_path and os.name != "nt":
+        # WSL环境下：D:/JDDownloads -> /mnt/d/JDDownloads
+        path = f"/mnt/{drive_letter.lower()}/{path}"
+        return os.path.abspath(path)
+    
+    # Windows环境下
+    if os.name == "nt":
+        if is_windows_path:
+            # 还原完整Windows路径
+            path = f"{drive_letter}:\\{path.replace('/', os.sep)}"
+        elif not os.path.isabs(path):
+            # 相对路径映射到fallback_root
+            path = os.path.join(fallback_root, path)
+        return os.path.abspath(path)
+    
+    # Unix环境下（非WSL，没有Windows驱动器）
+    if not os.path.isabs(path):
+        # 如果仍然不是绝对路径，使用fallback_root
+        path = os.path.join(fallback_root, path)
+    return os.path.abspath(path)
+
+
+def download_file(url: str, path: str, retry: int = 2, headers: Optional[dict] = None):
     attempt = 0
     while attempt <= retry:
         try:
@@ -117,8 +163,7 @@ class Handler(BaseHTTPRequestHandler):
         target_dir = payload.get("target_dir") or self.server.root_dir
         sub_dir = payload.get("sub_dir") or ""
 
-        if not os.path.isabs(target_dir):
-            target_dir = os.path.abspath(target_dir)
+        target_dir = normalize_root(target_dir, self.server.root_dir)
 
         results = []
         success = 0

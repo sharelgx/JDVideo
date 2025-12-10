@@ -35,7 +35,18 @@ async function loadService() {
 
 async function saveService() {
   const url = (document.getElementById("serviceUrl").value || "").trim();
-  const folder = (document.getElementById("serviceFolder").value || "").trim();
+  let folder = (document.getElementById("serviceFolder").value || "").trim();
+  
+  // 清理路径：去除不可见字符，修正全角字符
+  if (folder) {
+    folder = folder
+      .replace(/[\u200B-\u200D\uFEFF]/g, "") // 去除零宽字符
+      .replace(/[\u3000]/g, " ") // 全角空格转半角
+      .replace(/[：]/g, ":") // 全角冒号转半角
+      .trim();
+    // 更新输入框显示清理后的值
+    document.getElementById("serviceFolder").value = folder;
+  }
   
   if (!url) {
     setServiceInfo("请填写服务地址", "error");

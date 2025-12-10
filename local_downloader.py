@@ -43,47 +43,82 @@ def ensure_dir(path: str):
 
 def normalize_root(path: str, fallback_root: str) -> str:
     """规范化根目录，修正全角冒号/意外相对路径，确保为绝对路径。"""
+    original_path = path
     if not path:
         return fallback_root
-    # 修正全角冒号等情况
-    path = path.replace("：", ":")
+    
+    # 去除所有不可见字符和特殊空白字符
+    path = "".join(c for c in path if c.isprintable())
+    
+    # 修正全角冒号等情况（处理所有可能的全角字符）
+    path = path.replace("：", ":")  # 全角冒号
+    path = path.replace("　", " ")  # 全角空格
+    path = path.replace("\u2009", ":")  # 其他可能的冒号变体
+    
     # 统一路径分隔符
     path = path.replace("\\", "/")
     # 去除首尾空格和斜杠
     path = path.strip().strip("/")
     
-    # 检测Windows驱动器路径（如 D:/xxx 或 D:xxx）
+    # 检测Windows驱动器路径（如 D:/xxx、D:\xxx、D:xxx）
     is_windows_path = False
     drive_letter = None
-    if len(path) >= 2 and path[1] == ":":
-        is_windows_path = True
-        drive_letter = path[0].upper()
-        if len(path) == 2:
-            path = path + "/"
-        else:
-            path = path[2:].lstrip("/")
+    if len(path) >= 2:
+        # 检查是否是驱动器字母后跟冒号
+        first_char = path[0].upper()
+        second_char = path[1]
+        
+        if first_char.isalpha() and second_char == ":":
+            is_windows_path = True
+            drive_letter = first_char
+            if len(path) == 2:
+                path = "/"  # D: -> D:/
+            else:
+                path = path[2:].lstrip("/")
+    
+    # 日志记录（用于调试）
+    import sys
+    print(f"[normalize] original='{original_path}' -> path='{path}' is_windows={is_windows_path} drive={drive_letter} os.name={os.name}", file=sys.stderr)
     
     # 如果在WSL/Unix环境下检测到Windows路径，转换为/mnt/drive格式
     if is_windows_path and os.name != "nt":
         # WSL环境下：D:/JDDownloads -> /mnt/d/JDDownloads
-        path = f"/mnt/{drive_letter.lower()}/{path}"
-        return os.path.abspath(path)
+        result = f"/mnt/{drive_letter.lower()}/{path}"
+        final = os.path.abspath(result)
+        print(f"[normalize] WSL conversion: {result} -> {final}", file=sys.stderr)
+        return final
     
     # Windows环境下
     if os.name == "nt":
         if is_windows_path:
             # 还原完整Windows路径
-            path = f"{drive_letter}:\\{path.replace('/', os.sep)}"
+            result = f"{drive_letter}:\\{path.replace('/', os.sep)}"
+            final = os.path.abspath(result)
+            print(f"[normalize] Windows path: {result} -> {final}", file=sys.stderr)
+            return final
         elif not os.path.isabs(path):
-            # 相对路径映射到fallback_root
-            path = os.path.join(fallback_root, path)
-        return os.path.abspath(path)
+            # 相对路径映射到fallback_root（这是问题所在！）
+            result = os.path.join(fallback_root, path)
+            final = os.path.abspath(result)
+            print(f"[normalize] WARNING: Relative path detected! '{path}' -> '{result}' -> '{final}'", file=sys.stderr)
+            print(f"[normalize] fallback_root='{fallback_root}'", file=sys.stderr)
+            return final
+        else:
+            final = os.path.abspath(path)
+            print(f"[normalize] Already absolute: {path} -> {final}", file=sys.stderr)
+            return final
     
     # Unix环境下（非WSL，没有Windows驱动器）
     if not os.path.isabs(path):
         # 如果仍然不是绝对路径，使用fallback_root
-        path = os.path.join(fallback_root, path)
-    return os.path.abspath(path)
+        result = os.path.join(fallback_root, path)
+        final = os.path.abspath(result)
+        print(f"[normalize] Unix relative: {path} -> {result} -> {final}", file=sys.stderr)
+        return final
+    
+    final = os.path.abspath(path)
+    print(f"[normalize] Final: {path} -> {final}", file=sys.stderr)
+    return final
 
 
 def download_file(url: str, path: str, retry: int = 2, headers: Optional[dict] = None):
@@ -163,7 +198,11 @@ class Handler(BaseHTTPRequestHandler):
         target_dir = payload.get("target_dir") or self.server.root_dir
         sub_dir = payload.get("sub_dir") or ""
 
+        # 记录原始输入用于调试
+        import sys
+        print(f"[download] received target_dir raw: {repr(target_dir)}", file=sys.stderr)
         target_dir = normalize_root(target_dir, self.server.root_dir)
+        print(f"[download] normalized target_dir: {target_dir}", file=sys.stderr)
 
         results = []
         success = 0

@@ -234,13 +234,23 @@ async function sendToLocal() {
   const folderInputInline = document.getElementById("serviceFolderInline");
   serviceUrl = (urlInputInline?.value || serviceUrl || "").trim();
   serviceFolder = (folderInputInline?.value || serviceFolder || "").trim();
+  
+  // 清理路径：去除不可见字符，修正全角字符
+  if (serviceFolder) {
+    serviceFolder = serviceFolder
+      .replace(/[\u200B-\u200D\uFEFF]/g, "") // 去除零宽字符
+      .replace(/[\u3000]/g, " ") // 全角空格转半角
+      .replace(/[：]/g, ":") // 全角冒号转半角
+      .trim();
+  }
+  
   saveService();
   if (!serviceUrl) {
     setInfo("请先填写本地服务地址");
     return;
   }
   setInfo("发送到本地服务中…");
-  log("popup:send_local", { count: ready.length, serviceUrl });
+  log("popup:send_local", { count: ready.length, serviceUrl, target_dir: serviceFolder });
   try {
     const resp = await fetch(serviceUrl.replace(/\/+$/, "") + "/download", {
       method: "POST",

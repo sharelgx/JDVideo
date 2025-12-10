@@ -144,19 +144,38 @@ async function autoCapture() {
       type: "AUTO_CAPTURE_URLS",
       options: { delayMs: 2200, retries: 3 }
     });
-    if (res?.error) {
-      setInfo(`捕获失败：${res.error}`);
+    
+    if (!res) {
+      setInfo("自动捕获异常：未收到响应，请刷新页面后重试");
+      log("popup:auto_capture_no_response");
       return;
     }
+    
+    if (res?.error) {
+      const errorMsg = res.error || "未知错误";
+      setInfo(`捕获失败：${errorMsg}`);
+      log("popup:auto_capture_error", { error: errorMsg });
+      return;
+    }
+    
+    if (!res.ok) {
+      setInfo(`自动捕获失败：${res.error || "未知原因"}`);
+      return;
+    }
+    
     currentItems = (res?.items || []).map((item) => ({
       ...item,
       status: item.videoUrl ? "ready" : "待捕获"
     }));
     renderList();
     updateStats();
-    setInfo(`自动捕获完成，成功 ${res?.successCount || 0}/${res?.totalTried || 0}`);
+    const success = res?.successCount || 0;
+    const total = res?.totalTried || 0;
+    setInfo(`自动捕获完成，成功 ${success}/${total}${success < total ? "，可在后台管理查看日志" : ""}`);
   } catch (error) {
-    setInfo("自动捕获异常，请重试");
+    const errorMsg = error?.message || String(error);
+    setInfo(`自动捕获异常：${errorMsg}。请刷新页面或查看后台日志`);
+    log("popup:auto_capture_exception", { error: errorMsg, stack: error?.stack });
   }
 }
 

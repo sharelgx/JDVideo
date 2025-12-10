@@ -33,11 +33,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 function ensureInject() {
-  if (document.getElementById("__jdvideo_inject")) return;
-  const script = document.createElement("script");
-  script.id = "__jdvideo_inject";
-  script.src = chrome.runtime.getURL("inject.js");
-  (document.head || document.documentElement).appendChild(script);
+  if (document.getElementById("__jdvideo_inject")) {
+    log("content:inject_already_loaded");
+    return;
+  }
+  try {
+    const script = document.createElement("script");
+    script.id = "__jdvideo_inject";
+    script.src = chrome.runtime.getURL("inject.js");
+    script.onerror = () => {
+      log("content:inject_load_error", { src: script.src });
+    };
+    script.onload = () => {
+      log("content:inject_load_success");
+    };
+    (document.head || document.documentElement).appendChild(script);
+    log("content:inject_script_added");
+  } catch (e) {
+    log("content:inject_create_error", { error: e.message });
+  }
 }
 
 function bindPageListeners() {
@@ -100,46 +114,75 @@ function parseItems() {
 }
 
 async function autoCaptureUrls(options) {
-  const delay = Number(options.delayMs) || 2200;
-  const retries = Number(options.retries) || 3;
-  const maxRounds = 2;
-  let round = 0;
-  let success = 0;
-  let targets = [];
+  try {
+    const delay = Number(options.delayMs) || 2200;
+    const retries = Number(options.retries) || 3;
+    const maxRounds = 2;
+    let round = 0;
+    let success = 0;
+    let targets = [];
 
-  do {
-    const items = parseItems();
-    targets = items.filter((item) => !item.videoUrl && state.buttonMap.get(item.sku));
-    log("content:auto_capture_round", { round: round + 1, targets: targets.length, delay, retries });
-    for (const item of targets) {
-      const btn = state.buttonMap.get(item.sku);
-      if (!btn) continue;
-      let captured = false;
-      for (let attempt = 0; attempt <= retries; attempt++) {
-        markPendingSku(item.sku);
-        dispatchHumanClick(btn);
-        await wait(delay);
-        if (state.capturedUrls.get(item.sku)?.url) {
-          captured = true;
-          success += 1;
-          break;
+    log("content:auto_capture_start", { delay, retries, maxRounds });
+    
+    // 确保注入脚本已加载
+    ensureInject();
+    await wait(300); // 等待注入脚本初始化
+
+    do {
+      const items = parseItems();
+      targets = items.filter((item) => !item.videoUrl && state.buttonMap.get(item.sku));
+      log("content:auto_capture_round", { round: round + 1, targets: targets.length });
+      
+      if (targets.length === 0) {
+        log("content:auto_capture_no_targets");
+        break;
+      }
+
+      for (const item of targets) {
+        try {
+          const btn = state.buttonMap.get(item.sku);
+          if (!btn) {
+            log("content:auto_capture_no_button", { sku: item.sku });
+            continue;
+          }
+          let captured = false;
+          for (let attempt = 0; attempt <= retries; attempt++) {
+            try {
+              markPendingSku(item.sku);
+              dispatchHumanClick(btn);
+              await wait(delay);
+              if (state.capturedUrls.get(item.sku)?.url) {
+                captured = true;
+                success += 1;
+                log("content:auto_capture_success", { sku: item.sku, attempt: attempt + 1 });
+                break;
+              }
+            } catch (e) {
+              log("content:auto_capture_attempt_error", { sku: item.sku, attempt: attempt + 1, error: e.message });
+            }
+          }
+          if (!captured) {
+            log("content:auto_capture_miss", { sku: item.sku });
+          }
+        } catch (e) {
+          log("content:auto_capture_item_error", { sku: item.sku, error: e.message });
         }
       }
-      if (!captured) {
-        log("content:auto_capture_miss", { sku: item.sku });
-      }
-    }
-    round += 1;
-  } while (targets.length && round < maxRounds);
+      round += 1;
+    } while (targets.length && round < maxRounds);
 
-  const finalItems = parseItems();
-  log("content:auto_capture_done", { success, tried: finalItems.length });
-  return {
-    ok: true,
-    successCount: success,
-    totalTried: finalItems.length,
-    items: finalItems
-  };
+    const finalItems = parseItems();
+    log("content:auto_capture_done", { success, total: finalItems.length, round });
+    return {
+      ok: true,
+      successCount: success,
+      totalTried: finalItems.length,
+      items: finalItems
+    };
+  } catch (error) {
+    log("content:auto_capture_fatal", { error: error?.message || String(error), stack: error?.stack });
+    throw error;
+  }
 }
 
 function markPendingSku(sku) {

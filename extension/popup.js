@@ -108,7 +108,19 @@ async function startDownload() {
     log("popup:download_no_urls");
     return;
   }
-  setInfo(`提交下载 ${ready.length} 条`);
+  
+  // 检查是否配置了本地服务，如果有则优先使用本地服务
+  const urlInputInline = document.getElementById("serviceUrlInline");
+  const folderInputInline = document.getElementById("serviceFolderInline");
+  const configuredUrl = (urlInputInline?.value || serviceUrl || "").trim();
+  if (configuredUrl) {
+    setInfo("检测到本地服务配置，使用本地服务下载…");
+    await sendToLocal();
+    return;
+  }
+  
+  // 否则使用浏览器默认下载
+  setInfo(`提交下载 ${ready.length} 条（浏览器默认目录）`);
   log("popup:start_download", { count: ready.length });
   await chrome.runtime.sendMessage({
     type: "START_DOWNLOADS",

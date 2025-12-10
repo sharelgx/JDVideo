@@ -1,7 +1,8 @@
 const state = {
   items: [],
   capturedUrls: new Map(), // sku -> { url, headers }
-  buttonMap: new Map()
+  buttonMap: new Map(),
+  pendingSku: null // 当前待捕获的SKU
 };
 
 ensureInject();
@@ -59,13 +60,18 @@ function bindPageListeners() {
     if (event.source !== window) return;
     const data = event.data;
     if (data?.source === "jdvideo-inject" && data.type === "CAPTURED_URL") {
-      const sku = data.sku || findFirstPendingSku() || `capture-${Date.now()}`;
+      // 优先使用传入的SKU，其次使用state.pendingSku，最后才用临时SKU
+      const sku = data.sku || state.pendingSku || findFirstPendingSku() || `capture-${Date.now()}`;
       if (data.url) {
         state.capturedUrls.set(sku, {
           url: data.url,
           headers: data.meta?.headers || buildHeaders()
         });
-        log("content:captured_url", { sku, url: data.url });
+        log("content:captured_url", { sku, capturedSku: data.sku, pendingSku: state.pendingSku, url: data.url });
+        // 清空pending SKU，避免下次误用
+        if (state.pendingSku === sku) {
+          state.pendingSku = null;
+        }
       }
     }
     if (data?.source === "jdvideo-inject" && data.type === "LOG_INJECT") {
@@ -186,6 +192,7 @@ async function autoCaptureUrls(options) {
 }
 
 function markPendingSku(sku) {
+  state.pendingSku = sku;
   window.postMessage(
     {
       source: "jdvideo-content",
@@ -194,6 +201,7 @@ function markPendingSku(sku) {
     },
     "*"
   );
+  log("content:mark_pending_sku", { sku });
 }
 
 function dispatchHumanClick(btn) {

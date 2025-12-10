@@ -33,16 +33,25 @@
   const notifyCapture = (url, meta = {}) => {
     if (!url) return;
     const headers = meta.headers || buildHeaders();
-    log("inject:capture_url", { url, sku: state.pendingSku });
+    const currentSku = state.pendingSku; // 保存当前pending SKU
+    log("inject:capture_url", { url, sku: currentSku, meta: meta.via });
+    
     const payload = {
       source: "jdvideo-inject",
       type: "CAPTURED_URL",
       url,
-      sku: state.pendingSku,
+      sku: currentSku, // 使用保存的SKU
       ts: Date.now(),
       meta: { ...meta, headers }
     };
-    state.pendingSku = null;
+    
+    // 延迟清空pending SKU，确保在异步JSON解析时还能使用
+    setTimeout(() => {
+      if (state.pendingSku === currentSku) {
+        state.pendingSku = null;
+      }
+    }, 1500); // 延迟1.5秒清空，给JSON响应足够时间
+    
     window.postMessage(payload, "*");
   };
 
@@ -60,11 +69,16 @@
       } else if (/json/i.test(ctype)) {
         // 尝试从 JSON 响应中提取视频 URL
         const cloned = response.clone();
+        const pendingSkuSnapshot = state.pendingSku; // 保存当前pending SKU快照
         cloned
           .json()
           .then((data) => {
             const url = extractUrlFromJson(data);
             if (url && isLikelyVideo(url)) {
+              // 如果pending SKU已被清空，尝试恢复（但仅在很短时间内）
+              if (!state.pendingSku && pendingSkuSnapshot) {
+                state.pendingSku = pendingSkuSnapshot;
+              }
               notifyCapture(url, { via: "fetch_json" });
             }
           })
@@ -90,12 +104,19 @@
   };
 
   XMLHttpRequest.prototype.send = function (...args) {
+    const pendingSkuSnapshot = state.pendingSku; // 保存当前pending SKU快照
     this.addEventListener(
       "load",
       () => {
         try {
           const url = this.responseURL || this._jdvideoUrl;
           const contentType = this.getResponseHeader("content-type") || "";
+          
+          // 如果pending SKU已被清空，尝试恢复（仅在很短时间内）
+          if (!state.pendingSku && pendingSkuSnapshot) {
+            state.pendingSku = pendingSkuSnapshot;
+          }
+          
           if (isVideoUrl(url, { get: () => contentType })) {
             notifyCapture(url, { via: "xhr" });
           } else if (/json/i.test(contentType)) {
@@ -103,13 +124,21 @@
               const data = JSON.parse(this.responseText || "{}");
               const videoUrl = extractUrlFromJson(data);
               if (videoUrl && isLikelyVideo(videoUrl)) {
+                // 再次检查pending SKU
+                if (!state.pendingSku && pendingSkuSnapshot) {
+                  state.pendingSku = pendingSkuSnapshot;
+                }
                 notifyCapture(videoUrl, { via: "xhr_json" });
                 return;
               }
             } catch (e) {
               // ignore
             }
-          } else if (state.pendingSku) {
+          } else if (state.pendingSku || pendingSkuSnapshot) {
+            // 使用当前pending SKU或快照
+            if (!state.pendingSku && pendingSkuSnapshot) {
+              state.pendingSku = pendingSkuSnapshot;
+            }
             notifyCapture(url, { via: "xhr_fallback" });
           } else {
             log("inject:xhr_skip", { url });

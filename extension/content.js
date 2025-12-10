@@ -121,9 +121,10 @@ function parseItems() {
 
 async function autoCaptureUrls(options) {
   try {
-    const delay = Number(options.delayMs) || 2200;
-    const retries = Number(options.retries) || 3;
-    const maxRounds = 2;
+    // 增加等待时间和重试次数，确保能捕获到URL
+    const delay = Number(options.delayMs) || 3000; // 增加到3秒
+    const retries = Number(options.retries) || 4; // 增加到4次
+    const maxRounds = 3; // 增加到3轮
     let round = 0;
     let success = 0;
     let targets = [];
@@ -132,7 +133,7 @@ async function autoCaptureUrls(options) {
     
     // 确保注入脚本已加载
     ensureInject();
-    await wait(300); // 等待注入脚本初始化
+    await wait(500); // 等待注入脚本初始化
 
     do {
       const items = parseItems();
@@ -151,32 +152,75 @@ async function autoCaptureUrls(options) {
             log("content:auto_capture_no_button", { sku: item.sku });
             continue;
           }
+          
+          // 确保pending SKU已设置
+          markPendingSku(item.sku);
+          await wait(100); // 给一点时间让pending SKU设置生效
+          
           let captured = false;
           for (let attempt = 0; attempt <= retries; attempt++) {
             try {
+              // 每次尝试前重新设置pending SKU
               markPendingSku(item.sku);
+              
+              // 点击按钮
               dispatchHumanClick(btn);
-              await wait(delay);
-              if (state.capturedUrls.get(item.sku)?.url) {
-                captured = true;
-                success += 1;
-                log("content:auto_capture_success", { sku: item.sku, attempt: attempt + 1 });
-                break;
+              
+              // 分段等待，每段检查一次是否捕获到
+              const checkInterval = Math.max(600, delay / 4);
+              let waited = 0;
+              while (waited < delay && !captured) {
+                await wait(checkInterval);
+                waited += checkInterval;
+                // 检查是否捕获到URL
+                if (state.capturedUrls.get(item.sku)?.url) {
+                  captured = true;
+                  success += 1;
+                  log("content:auto_capture_success", { sku: item.sku, attempt: attempt + 1, waited });
+                  break;
+                }
+              }
+              
+              // 最终检查一次（JSON响应可能需要更长时间）
+              if (!captured) {
+                await wait(800);
+                if (state.capturedUrls.get(item.sku)?.url) {
+                  captured = true;
+                  success += 1;
+                  log("content:auto_capture_success_final_check", { sku: item.sku, attempt: attempt + 1 });
+                  break;
+                }
+              }
+              
+              if (captured) break;
+              
+              // 如果还没捕获到，等待一段时间再重试
+              if (attempt < retries) {
+                await wait(600);
               }
             } catch (e) {
               log("content:auto_capture_attempt_error", { sku: item.sku, attempt: attempt + 1, error: e.message });
             }
           }
+          
           if (!captured) {
-            log("content:auto_capture_miss", { sku: item.sku });
+            log("content:auto_capture_miss", { sku: item.sku, attempts: retries + 1 });
           }
         } catch (e) {
           log("content:auto_capture_item_error", { sku: item.sku, error: e.message });
         }
       }
+      
+      // 轮次之间等待，让网络请求有时间完成
+      if (targets.length > 0 && round < maxRounds - 1) {
+        await wait(1000);
+      }
+      
       round += 1;
     } while (targets.length && round < maxRounds);
 
+    // 最终再等待一下，收集可能延迟的URL（特别是JSON响应）
+    await wait(2000);
     const finalItems = parseItems();
     log("content:auto_capture_done", { success, total: finalItems.length, round });
     return {

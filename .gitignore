@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 下载的视频文件
+*.mp4
+*.m3u8
+*.flv
+*.ts
+*.avi
+*.mov
+*.mkv
+
+# 下载目录
+D:/JDDownloads/
+/mnt/d/JDDownloads/
+JDDownloads/
+
+# 临时文件
+*.tmp
+*.temp
+*.log
+logs/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 其他临时文件
+et --hard*
+的直接下载*
+
+# misc文件夹（存放整理的非项目文件）
+misc/

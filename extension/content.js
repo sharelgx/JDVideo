@@ -130,26 +130,33 @@ function parseItems() {
 
 async function autoCaptureUrls(options) {
   try {
-    // 使用V1.0稳定版的速度参数，但保留改进的SKU绑定逻辑
-    const delay = Number(options.delayMs) || 2200; // 恢复为V1.0的2.2秒
-    const retries = Number(options.retries) || 3; // 恢复为V1.0的3次
-    const maxRounds = 2; // 恢复为V1.0的2轮
-    let round = 0;
+    // 方案B：自动点击按钮触发接口，然后拦截视频URL
+    const clickDelay = 2000; // 点击后等待时间（等待fetch请求完成）
+    const clickRetries = 2; // 每个按钮最多重试2次
     let success = 0;
-    let targets = [];
 
-    log("content:auto_capture_start", { delay, retries, maxRounds });
+    log("content:auto_capture_start_auto_click", { clickDelay, clickRetries });
     
     // 确保注入脚本已加载
     ensureInject();
     await wait(500); // 等待注入脚本初始化
     
-    // 首次解析，获取所有待捕获的SKU列表
+    // 解析列表，获取所有SKU
     const initialItems = parseItems();
-    const initialTargets = initialItems.filter((item) => !item.videoUrl && state.buttonMap.get(item.sku));
-    const initialSkus = initialTargets.map(item => item.sku);
+    let targets = initialItems.filter((item) => !item.videoUrl && state.buttonMap.get(item.sku));
+    const initialSkus = targets.map(item => item.sku);
     
-    // 通知background进入捕获模式
+    if (targets.length === 0) {
+      log("content:auto_capture_no_targets");
+      return {
+        ok: true,
+        successCount: initialItems.filter(i => i.videoUrl).length,
+        totalTried: initialItems.length,
+        items: initialItems
+      };
+    }
+    
+    // 通知background进入捕获模式（用于拦截浏览器下载）
     if (initialSkus.length > 0) {
       try {
         await chrome.runtime.sendMessage({
@@ -162,104 +169,60 @@ async function autoCaptureUrls(options) {
       }
     }
 
-    do {
-      const items = parseItems();
-      targets = items.filter((item) => !item.videoUrl && state.buttonMap.get(item.sku));
-      log("content:auto_capture_round", { round: round + 1, targets: targets.length });
-      
-      // 每轮开始时更新capturingSkus列表（可能有新的SKU）
-      if (targets.length > 0) {
-        const currentSkus = targets.map(item => item.sku);
-        try {
-          await chrome.runtime.sendMessage({
-            type: "START_CAPTURE_MODE",
-            skus: currentSkus
-          });
-        } catch (e) {
-          // ignore
+    // 自动点击按钮触发fetch请求，然后拦截视频URL
+    for (const item of targets) {
+      try {
+        const btn = state.buttonMap.get(item.sku);
+        if (!btn) {
+          log("content:auto_capture_no_button", { sku: item.sku });
+          continue;
         }
-      }
-      
-      if (targets.length === 0) {
-        log("content:auto_capture_no_targets");
-        break;
-      }
-
-      for (const item of targets) {
-        try {
-          const btn = state.buttonMap.get(item.sku);
-          if (!btn) {
-            log("content:auto_capture_no_button", { sku: item.sku });
-            continue;
-          }
-          
-          let captured = false;
-          for (let attempt = 0; attempt <= retries; attempt++) {
-            try {
-              // 每次尝试前重新设置pending SKU，确保注入脚本收到
-              markPendingSku(item.sku);
-              await wait(150); // 给足够时间让pending SKU设置到注入脚本
-              
-              // 点击按钮
-              log("content:btn_click", { sku: item.sku, attempt: attempt + 1 });
-              dispatchHumanClick(btn);
-              
-              // 分段等待并检查，但减少检查间隔以提高响应速度
-              const checkInterval = 400;
-              let waited = 0;
-              while (waited < delay && !captured) {
-                await wait(checkInterval);
-                waited += checkInterval;
-                // 检查是否捕获到URL
-                if (state.capturedUrls.get(item.sku)?.url) {
-                  captured = true;
-                  success += 1;
-                  log("content:auto_capture_success", { sku: item.sku, attempt: attempt + 1, waited });
-                  break;
-                }
-              }
-              
-              // 最终检查一次（JSON响应可能需要更长时间）
-              if (!captured) {
-                await wait(500);
-                if (state.capturedUrls.get(item.sku)?.url) {
-                  captured = true;
-                  success += 1;
-                  log("content:auto_capture_success_final_check", { sku: item.sku, attempt: attempt + 1 });
-                  break;
-                }
-              }
-              
-              if (captured) break;
-              
-              // 如果还没捕获到，等待一段时间再重试
-              if (attempt < retries) {
-                await wait(400);
-              }
-            } catch (e) {
-              log("content:auto_capture_attempt_error", { sku: item.sku, attempt: attempt + 1, error: e.message });
+        
+        let captured = false;
+        for (let attempt = 0; attempt <= clickRetries; attempt++) {
+          try {
+            // 每次尝试前重新设置pending SKU，确保inject.js能正确绑定
+            markPendingSku(item.sku);
+            await wait(200); // 给足够时间让pending SKU设置到注入脚本
+            
+            // 自动点击按钮触发fetch请求
+            log("content:auto_click_trigger", { sku: item.sku, attempt: attempt + 1 });
+            dispatchHumanClick(btn);
+            
+            // 等待fetch请求完成并拦截视频URL
+            await wait(clickDelay);
+            
+            // 检查是否捕获到URL
+            const currentItems = parseItems();
+            const updatedItem = currentItems.find(i => i.sku === item.sku);
+            if (updatedItem?.videoUrl) {
+              captured = true;
+              success += 1;
+              log("content:auto_capture_success", { sku: item.sku, attempt: attempt + 1, url: updatedItem.videoUrl });
+              break;
             }
+          } catch (e) {
+            log("content:auto_capture_attempt_error", { sku: item.sku, attempt: attempt + 1, error: e.message });
           }
-          
-          if (!captured) {
-            log("content:auto_capture_miss", { sku: item.sku, attempts: retries + 1 });
-          }
-        } catch (e) {
-          log("content:auto_capture_item_error", { sku: item.sku, error: e.message });
         }
+        
+        if (!captured) {
+          log("content:auto_capture_miss", { sku: item.sku, attempts: clickRetries + 1 });
+        }
+        
+        // 按钮之间稍作延迟，避免请求过快
+        if (item !== targets[targets.length - 1]) {
+          await wait(500);
+        }
+      } catch (e) {
+        log("content:auto_capture_item_error", { sku: item.sku, error: e.message });
       }
-      
-      // 轮次之间等待，让网络请求有时间完成
-      if (targets.length > 0 && round < maxRounds - 1) {
-        await wait(800);
-      }
-      
-      round += 1;
-    } while (targets.length && round < maxRounds);
+    }
 
-    // 最终再等待一下，收集可能延迟的URL（特别是JSON响应）
-    await wait(1500); // 减少到1.5秒，接近V1.0速度
+    // 最终解析
     const finalItems = parseItems();
+    const finalCaptured = finalItems.filter((item) => item.videoUrl);
+    success = finalCaptured.length;
     
     // 通知background退出捕获模式
     try {
@@ -271,7 +234,10 @@ async function autoCaptureUrls(options) {
       log("content:capture_mode_end_error", { error: e.message });
     }
     
-    log("content:auto_capture_done", { success, total: finalItems.length, round });
+    log("content:auto_capture_done_hybrid", { 
+      success, 
+      total: finalItems.length 
+    });
     return {
       ok: true,
       successCount: success,

@@ -2,7 +2,11 @@ const state = {
   items: [],
   capturedUrls: new Map(), // sku -> { url, headers }
   buttonMap: new Map(),
-  pendingSku: null // 当前待捕获的SKU
+  pendingSku: null, // 当前待捕获的SKU
+  // 分页累计：跨页合并后的全量商品（按 SKU 去重）
+  allItemsBySku: new Map(), // sku -> item
+  allSkuOrder: [], // 按首次发现顺序保存 sku
+  explainId: null // 当前讲解页id（切换讲解页时自动清空累计）
 };
 
 console.log("[content] ========== content.js 已加载 ==========");
@@ -88,6 +92,17 @@ function bindPageListeners() {
           headers
         });
         log("content:captured_url", { sku, capturedSku: data.sku, pendingSku: state.pendingSku, url: data.url });
+
+        // 同步写回累计 items（跨页也能拿到）
+        const existing = state.allItemsBySku.get(sku);
+        if (existing) {
+          existing.videoUrl = existing.videoUrl || data.url;
+          existing.headers = existing.headers || headers;
+          // 不强行修改 hasDownloadButton（它只代表“当前页是否可点击”）
+          state.allItemsBySku.set(sku, existing);
+          // 同步 state.items（给弹窗刷新用）
+          state.items = state.allSkuOrder.map((k) => state.allItemsBySku.get(k)).filter(Boolean);
+        }
         
         // 方案2：不在这里自动下载，等待用户点击"批量下载"
         // 下载逻辑在background.js中，通过监听浏览器下载事件来实现转发
@@ -433,8 +448,23 @@ function isLikelyVideoUrl(url) {
 function parseItems() {
   console.log("[content] parseItems 开始执行");
   log("content:parse_start");
+
+  // 讲解页切换时清空累计（避免不同讲解页的数据混在一起）
+  try {
+    const urlParams = new URLSearchParams(window.location.search);
+    const currentExplainId = urlParams.get("id") || null;
+    if (state.explainId !== currentExplainId) {
+      state.explainId = currentExplainId;
+      state.allItemsBySku.clear();
+      state.allSkuOrder = [];
+      log("content:accumulate_reset_on_explain_change", { explainId: currentExplainId });
+    }
+  } catch (e) {
+    // ignore
+  }
+
   const nodes = document.querySelectorAll(".antd-pro-pages-explain-components-table-list-goodsInfoContent");
-  const results = [];
+  const pageResults = [];
   state.buttonMap.clear();
   const baseHeaders = buildHeaders();
   nodes.forEach((node, idx) => {
@@ -525,7 +555,7 @@ function parseItems() {
       }
     }
     
-    results.push({
+    pageResults.push({
       sku,
       title,
       videoUrl: finalVideoUrl,
@@ -534,9 +564,38 @@ function parseItems() {
       extractedFromDom: Boolean(finalVideoUrl)
     });
   });
-  state.items = results;
-  log("content:parse_done", { count: results.length });
-  return results;
+
+  // ========= 分页累计合并（按 SKU 去重）=========
+  for (const item of pageResults) {
+    const sku = item.sku;
+    if (!sku) continue;
+    const prev = state.allItemsBySku.get(sku);
+    if (!prev) {
+      state.allItemsBySku.set(sku, item);
+      state.allSkuOrder.push(sku);
+      continue;
+    }
+    // 合并：标题/URL/headers/按钮可见性
+    const mergedTitle =
+      (prev.title && prev.title.length >= (item.title || "").length) ? prev.title : item.title;
+    const mergedVideoUrl = prev.videoUrl || item.videoUrl || null;
+    state.allItemsBySku.set(sku, {
+      ...prev,
+      ...item,
+      title: mergedTitle,
+      videoUrl: mergedVideoUrl,
+      headers: prev.headers || item.headers || baseHeaders,
+      hasDownloadButton: Boolean(prev.hasDownloadButton || item.hasDownloadButton)
+    });
+  }
+
+  const mergedResults = state.allSkuOrder
+    .map((sku) => state.allItemsBySku.get(sku))
+    .filter(Boolean);
+
+  state.items = mergedResults;
+  log("content:parse_done", { pageCount: pageResults.length, totalCount: mergedResults.length });
+  return mergedResults;
 }
 
 async function autoCaptureUrls(options) {

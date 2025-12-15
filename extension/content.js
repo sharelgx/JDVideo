@@ -5,12 +5,15 @@ const state = {
   pendingSku: null // 当前待捕获的SKU
 };
 
-console.log("[content] content.js 已加载");
+console.log("[content] ========== content.js 已加载 ==========");
+console.log("[content] 当前URL:", window.location.href);
+console.log("[content] 检查 __jdvideoGetAllPreloadResponses:", typeof window.__jdvideoGetAllPreloadResponses);
 
 ensureInject();
 bindPageListeners();
 
 console.log("[content] 消息监听器已设置");
+console.log("[content] ======================================");
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("[content] 收到消息:", message?.type);

@@ -65,3 +65,6 @@
 - 插件代码：`manifest.json`、Service Worker、content script、注入脚本、弹窗/浮层 UI。
 - `README`：开发者模式加载步骤、使用指南、命名规则说明、常见问题与权限说明。
 
+
+
+

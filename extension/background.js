@@ -380,6 +380,36 @@ async function downloadWithRetry(item, retry, options) {
 async function triggerDownload(item, options) {
   const filename = buildFilename(item, options);
   
+  // 确保 videoUrl 是字符串，如果是对象则提取 url 字段
+  let videoUrl = item.videoUrl;
+  
+  // 如果 videoUrl 是对象，尝试提取 url 字段
+  if (typeof videoUrl === 'object' && videoUrl !== null) {
+    videoUrl = videoUrl.url || videoUrl.videoUrl || videoUrl.src || String(videoUrl);
+    log("bg:videoUrl_extracted_from_object", { original: typeof item.videoUrl, extracted: typeof videoUrl, videoUrl: String(videoUrl).substring(0, 100) });
+  }
+  
+  // 确保是字符串
+  if (videoUrl) {
+    videoUrl = String(videoUrl).trim();
+  }
+  
+  // 验证URL格式
+  if (!videoUrl || typeof videoUrl !== 'string' || videoUrl.length === 0) {
+    const error = new Error(`Invalid videoUrl: ${typeof item.videoUrl} - ${JSON.stringify(item.videoUrl).substring(0, 100)}`);
+    log("bg:download_invalid_url", { sku: item.sku, videoUrlType: typeof item.videoUrl, videoUrl: String(item.videoUrl).substring(0, 100) });
+    throw error;
+  }
+  
+  // 验证URL格式（必须以http://或https://开头）
+  if (!videoUrl.startsWith('http://') && !videoUrl.startsWith('https://')) {
+    const error = new Error(`Invalid URL format: ${videoUrl.substring(0, 100)}`);
+    log("bg:download_invalid_url_format", { sku: item.sku, videoUrl: videoUrl.substring(0, 100) });
+    throw error;
+  }
+  
+  log("bg:download_url_validated", { sku: item.sku, url: videoUrl.substring(0, 100) });
+  
   // 检查是否首次下载（未选择目录）
   const needsDirectorySelection = !savedDownloadDirectory;
   
@@ -388,7 +418,7 @@ async function triggerDownload(item, options) {
     return new Promise((resolve, reject) => {
       chrome.downloads.download(
         {
-          url: item.videoUrl,
+          url: videoUrl,
           filename: filename,
           conflictAction: "uniquify",
           saveAs: true // 首次下载时让用户选择目录
@@ -410,7 +440,7 @@ async function triggerDownload(item, options) {
   return new Promise((resolve, reject) => {
     chrome.downloads.download(
       {
-        url: item.videoUrl,
+        url: videoUrl,
         filename,
         conflictAction: "uniquify",
         saveAs: false // 不弹框，直接下载到已选择的目录

@@ -35,6 +35,11 @@ async function refreshItems() {
   log("popup:parse_click");
   try {
     const res = await chrome.tabs.sendMessage(activeTabId, { type: "PARSE_ITEMS" });
+    console.log("[popup] 收到解析结果:", res);
+    if (!res) {
+      setInfo("错误：未收到响应，content.js 可能未加载");
+      return;
+    }
     currentItems = (res?.items || []).map((item) => ({
       ...item,
       status: item.videoUrl ? "ready" : "待捕获"

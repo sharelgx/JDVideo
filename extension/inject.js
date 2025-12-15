@@ -102,8 +102,182 @@
            lower.includes("download") ||
            lower.includes("video") ||
            lower.includes("file") ||
+           lower.includes("transcode") || // 匹配transcode接口
            (lower.includes("jd.com") && (lower.includes("get") || lower.includes("query") || lower.includes("info")));
   };
+  
+  // 存储页面加载时捕获到的所有可能包含视频URL的API响应
+  const preloadApiResponses = new Map(); // url -> { data, timestamp }
+  
+  // 尝试从预加载的API响应中查找视频URL（用于方案2）
+  window.__jdvideoGetPreloadVideoUrl = function(sku) {
+    for (const [apiUrl, response] of preloadApiResponses.entries()) {
+      try {
+        const videoUrl = extractUrlFromJson(response.data);
+        if (videoUrl && isLikelyVideo(videoUrl)) {
+          // 检查是否匹配SKU（如果响应中包含SKU信息）
+          const responseSku = extractSkuFromResponse(response.data);
+          if (!responseSku || responseSku === sku) {
+            log("inject:found_preload_url", { apiUrl, sku, videoUrl: videoUrl.substring(0, 100) });
+            return videoUrl;
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+    return null;
+  };
+  
+  // 获取所有预加载的API响应（用于批量提取）
+  window.__jdvideoGetAllPreloadResponses = function() {
+    const results = [];
+    for (const [apiUrl, response] of preloadApiResponses.entries()) {
+      try {
+        // 尝试提取所有SKU的视频URL
+        if (response.data && typeof response.data === 'object') {
+          const skuVideos = extractAllSkuVideosFromResponse(response.data);
+          if (skuVideos && skuVideos.length > 0) {
+            results.push(...skuVideos);
+            log("inject:found_preload_sku_videos", { apiUrl, count: skuVideos.length });
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+    return results;
+  };
+  
+  // 从响应中提取所有SKU的视频URL
+  function extractAllSkuVideosFromResponse(data) {
+    if (!data || typeof data !== 'object') return [];
+    
+    const results = [];
+    
+    // 优先查找常见的数据结构路径（根据日志，可能是 data.list 或类似结构）
+    const commonPaths = [
+      'data.list',
+      'data.data.list',
+      'data.records',
+      'data.items',
+      'data.videos',
+      'data.skuVideos',
+      'result.data.list',
+      'list',
+      'data'
+    ];
+    
+    // 先尝试从常见路径提取
+    for (const path of commonPaths) {
+      try {
+        const target = path.split('.').reduce((obj, key) => obj?.[key], data);
+        if (target && Array.isArray(target) && target.length > 0) {
+          log("inject:found_array_at_path", { path, length: target.length, firstItemKeys: Object.keys(target[0] || {}).slice(0, 15) });
+          // 输出第一个元素的完整内容用于调试
+          if (target[0]) {
+            log("inject:first_item_sample", { path, firstItem: JSON.stringify(target[0]).substring(0, 500) });
+          }
+          for (const item of target) {
+            if (item && typeof item === 'object') {
+              const skuKeys = ['sku', 'skuId', 'id', 'productId', 'goodsId', 'itemId'];
+              const urlKeys = ['videoUrl', 'downloadUrl', 'url', 'mp4Url', 'fileUrl', 'video', 'download', 'file', 'playUrl'];
+              
+              let foundSku = null;
+              let foundUrl = null;
+              
+              // 查找SKU
+              for (const key of skuKeys) {
+                if (item[key] && (typeof item[key] === 'string' || typeof item[key] === 'number')) {
+                  foundSku = String(item[key]);
+                  break;
+                }
+              }
+              
+              // 查找视频URL
+              for (const key of urlKeys) {
+                const val = item[key];
+                if (val && typeof val === 'string' && isLikelyVideo(val)) {
+                  foundUrl = val;
+                  break;
+                }
+              }
+              
+              // 如果找到SKU和URL，添加到结果
+              if (foundSku && foundUrl) {
+                const exists = results.some(r => r.sku === foundSku);
+                if (!exists) {
+                  results.push({ sku: foundSku, url: foundUrl });
+                  log("inject:extracted_sku_video_pair", { sku: foundSku, url: foundUrl.substring(0, 100), path });
+                }
+              } else if (foundUrl) {
+                // 如果只有URL没有SKU，记录一下（可能需要从其他地方获取SKU）
+                log("inject:found_url_without_sku", { url: foundUrl.substring(0, 100), path, itemKeys: Object.keys(item).slice(0, 10) });
+              }
+            }
+          }
+          if (results.length > 0) {
+            log("inject:extractAllSkuVideos_success_from_path", { path, count: results.length });
+            return results;
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+    
+    // 如果常见路径没找到，使用递归查找（兜底方案）
+    function extractFromObject(obj, path = '', depth = 0) {
+      if (!obj || typeof obj !== 'object' || depth > 6) return;
+      
+      if (Array.isArray(obj)) {
+        for (const item of obj) {
+          extractFromObject(item, path, depth + 1);
+        }
+        return;
+      }
+      
+      const skuKeys = ['sku', 'skuId', 'id', 'productId', 'goodsId', 'itemId'];
+      const urlKeys = ['videoUrl', 'downloadUrl', 'url', 'mp4Url', 'fileUrl', 'video', 'download', 'file'];
+      
+      let foundSku = null;
+      let foundUrl = null;
+      
+      for (const key of skuKeys) {
+        if (obj[key] && (typeof obj[key] === 'string' || typeof obj[key] === 'number')) {
+          foundSku = String(obj[key]);
+          break;
+        }
+      }
+      
+      for (const key of urlKeys) {
+        const val = obj[key];
+        if (val && typeof val === 'string' && isLikelyVideo(val)) {
+          foundUrl = val;
+          break;
+        }
+      }
+      
+      if (foundSku && foundUrl) {
+        const exists = results.some(r => r.sku === foundSku);
+        if (!exists) {
+          results.push({ sku: foundSku, url: foundUrl });
+        }
+      }
+      
+      for (const key of Object.keys(obj)) {
+        if (key !== 'parent' && key !== 'children' && obj[key] && typeof obj[key] === 'object') {
+          extractFromObject(obj[key], path ? `${path}.${key}` : key, depth + 1);
+        }
+      }
+    }
+    
+    extractFromObject(data);
+    
+    log("inject:extractAllSkuVideos_result", { count: results.length, skus: results.map(r => r.sku) });
+    
+    return results;
+  }
 
   // 从请求URL或body中提取SKU
   const extractSkuFromRequest = (reqUrl, args) => {
@@ -166,6 +340,21 @@
         cloned
           .json()
           .then((data) => {
+            // 方案2：保存所有API响应（即使暂时没有视频URL），供后续查询使用
+            if (isPapi || reqUrl.includes("explain") || reqUrl.includes("transcode")) {
+              preloadApiResponses.set(reqUrl, {
+                data: data,
+                timestamp: Date.now()
+              });
+              // 只保留最近30秒的响应
+              const now = Date.now();
+              for (const [url, resp] of preloadApiResponses.entries()) {
+                if (now - resp.timestamp > 30000) {
+                  preloadApiResponses.delete(url);
+                }
+              }
+            }
+            
             // 增强的URL提取：支持更多字段名
             const url = extractUrlFromJson(data);
             if (url && isLikelyVideo(url)) {
@@ -262,11 +451,59 @@
             state.pendingSku = pendingSkuSnapshot;
           }
           
-          if (isVideoUrl(url, { get: () => contentType })) {
+          // 特别处理 live_pc_getPageSkuVideo 接口，无论是什么格式都尝试解析
+          const isGetPageSkuVideo = url.includes("getPageSkuVideo");
+          
+          // 排除接口URL本身（不是真正的视频URL）
+          const isActualVideoUrl = isVideoUrl(url, { get: () => contentType }) && 
+                                   !url.includes("getPageSkuVideo") && 
+                                   !url.includes("api.m.jd.com");
+          
+          if (isActualVideoUrl) {
             notifyCapture(url, { via: isPapi ? "xhr_papi_direct" : "xhr" });
-          } else if (/json/i.test(contentType)) {
+          } else if (/json/i.test(contentType) || isGetPageSkuVideo) {
             try {
               const data = JSON.parse(this.responseText || "{}");
+              
+              // 方案2：保存所有API响应（特别是 live_pc_getPageSkuVideo），供后续批量提取
+              if (isPapi || isGetPageSkuVideo || reqUrl.includes("explain") || reqUrl.includes("transcode")) {
+                preloadApiResponses.set(reqUrl, {
+                  data: data,
+                  timestamp: Date.now()
+                });
+                // 只保留最近30秒的响应
+                const now = Date.now();
+                for (const [url, resp] of preloadApiResponses.entries()) {
+                  if (now - resp.timestamp > 30000) {
+                    preloadApiResponses.delete(url);
+                  }
+                }
+                log("inject:preload_response_saved", { 
+                  url: reqUrl.substring(0, 100), 
+                  dataKeys: Object.keys(data || {}).slice(0, 10),
+                  isGetPageSkuVideo: isGetPageSkuVideo
+                });
+                
+                // 对于 getPageSkuVideo 接口，输出完整的响应结构用于调试
+                if (isGetPageSkuVideo) {
+                  log("inject:getPageSkuVideo_full_response", { 
+                    fullData: JSON.stringify(data).substring(0, 5000), // 输出前5000字符
+                    dataStructure: JSON.stringify(data, null, 2).substring(0, 5000) // 格式化的完整结构
+                  });
+                  // 也输出到控制台，方便查看完整数据
+                  console.log("[jdvideo] getPageSkuVideo 完整响应对象:", data);
+                  console.log("[jdvideo] getPageSkuVideo 完整JSON字符串:", JSON.stringify(data, null, 2));
+                  
+                  // 立即尝试提取所有SKU视频
+                  const allSkuVideos = extractAllSkuVideosFromResponse(data);
+                  console.log("[jdvideo] 从getPageSkuVideo提取到的SKU视频列表:", allSkuVideos);
+                  
+                  if (allSkuVideos.length === 0) {
+                    console.warn("[jdvideo] 警告：未能从getPageSkuVideo响应中提取到SKU视频映射，请检查数据结构");
+                  }
+                }
+              }
+              
               const videoUrl = extractUrlFromJson(data);
               if (videoUrl && isLikelyVideo(videoUrl)) {
                 // 尝试从响应数据中提取SKU
@@ -288,16 +525,16 @@
                   responseData: data // 传递响应数据以便提取SKU
                 });
                 return;
-              } else if (isPapi) {
-                // PAPI接口但未找到URL，记录详细日志用于调试
+              } else if (isPapi || reqUrl.includes("getPageSkuVideo")) {
+                // PAPI接口或getPageSkuVideo接口但未找到URL，记录详细日志用于调试
                 log("inject:papi_xhr_no_url", { 
                   url: reqUrl, 
-                  dataKeys: Object.keys(data || {}).slice(0, 20),
-                  dataSample: JSON.stringify(data).substring(0, 500) // 输出前500字符用于调试
+                  dataKeys: Object.keys(data || {}).slice(0, 30),
+                  dataSample: JSON.stringify(data).substring(0, 1000) // 输出前1000字符用于调试
                 });
               }
             } catch (e) {
-              if (isPapi) {
+              if (isPapi || reqUrl.includes("getPageSkuVideo")) {
                 log("inject:papi_xhr_parse_error", { url: reqUrl, error: e.message });
               }
             }

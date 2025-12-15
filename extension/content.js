@@ -5,13 +5,25 @@ const state = {
   pendingSku: null // 当前待捕获的SKU
 };
 
+console.log("[content] content.js 已加载");
+
 ensureInject();
 bindPageListeners();
 
+console.log("[content] 消息监听器已设置");
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  console.log("[content] 收到消息:", message?.type);
   if (message?.type === "PARSE_ITEMS") {
-    const items = parseItems();
-    sendResponse({ items });
+    console.log("[content] 收到 PARSE_ITEMS 消息");
+    try {
+      const items = parseItems();
+      console.log("[content] parseItems 完成，返回", items.length, "项");
+      sendResponse({ items });
+    } catch (error) {
+      console.error("[content] parseItems 出错:", error);
+      sendResponse({ items: [], error: error.message });
+    }
     return true;
   }
   if (message?.type === "AUTO_CAPTURE_URLS") {
@@ -89,7 +101,334 @@ function bindPageListeners() {
   });
 }
 
+// 批量获取所有SKU的视频URL（方案2：不点击）
+async function fetchAllSkuVideosFromApi(explainId) {
+  try {
+    // 关键接口：live_pc_getPageSkuVideo - 获取页面所有SKU的视频信息
+    // 从日志看，这个接口在页面加载时已经调用了，我们应该从inject.js的预加载响应中获取
+    // 但如果需要主动调用，需要模拟页面的请求格式
+    
+    log("content:fetching_all_sku_videos", { explainId });
+    
+    // 方法1：先尝试从inject.js的预加载API响应中获取（如果页面加载时已经调用了）
+    if (window.__jdvideoGetPreloadVideoUrl) {
+      // 这个函数只能获取单个SKU，我们需要一个能获取所有SKU的函数
+      // 先检查是否有批量接口的响应
+      log("content:checking_preload_responses");
+    }
+    
+    // 方法2：尝试主动调用接口（但需要正确的参数格式）
+    // 从Network日志看，这个接口可能需要特定的参数，我们先尝试简单的调用
+    const apiUrl = `https://api.m.jd.com/live_pc_getPageSkuVideo?functionId=live_pc_getPageSkuVideo&appid=plat-live-operate`;
+    
+    log("content:trying_api_call", { apiUrl, explainId });
+    
+    // 尝试GET请求（虽然可能失败，但先试试）
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Referer': window.location.href,
+          'User-Agent': navigator.userAgent
+        },
+        credentials: 'include' // 包含cookie
+      });
+      
+      log("content:api_response_status", { status: response.status, statusText: response.statusText });
+      
+      if (response.ok) {
+        const data = await response.json();
+        log("content:getPageSkuVideo_response", { 
+          dataKeys: Object.keys(data || {}).slice(0, 30),
+          dataSample: JSON.stringify(data).substring(0, 1000) // 输出前1000字符用于调试
+        });
+        
+        // 提取所有SKU的视频URL
+        const skuVideos = extractSkuVideosFromResponse(data);
+        if (skuVideos && skuVideos.length > 0) {
+          log("content:extracted_sku_videos", { count: skuVideos.length, videos: skuVideos });
+          return skuVideos; // 返回 [{sku, url}, ...]
+        } else {
+          log("content:no_sku_videos_extracted", { dataStructure: JSON.stringify(data).substring(0, 500) });
+        }
+      } else {
+        log("content:api_response_not_ok", { status: response.status, statusText: response.statusText });
+      }
+    } catch (fetchError) {
+      log("content:api_fetch_error", { error: fetchError.message, stack: fetchError.stack });
+    }
+    
+  } catch (e) {
+    log("content:fetch_all_sku_videos_error", { error: e.message, stack: e.stack });
+  }
+  
+  return null;
+}
+
+// 从接口响应中提取所有SKU的视频URL
+function extractSkuVideosFromResponse(data) {
+  if (!data || typeof data !== 'object') return null;
+  
+  const results = [];
+  
+  // 尝试不同的数据结构
+  const dataPaths = [
+    'data',
+    'data.list',
+    'data.videos',
+    'data.skuVideos',
+    'result',
+    'result.data',
+    'list'
+  ];
+  
+  for (const path of dataPaths) {
+    try {
+      const target = path.split('.').reduce((obj, key) => obj?.[key], data);
+      if (target && Array.isArray(target)) {
+        for (const item of target) {
+          if (item && typeof item === 'object') {
+            const sku = item.sku || item.skuId || item.id;
+            const url = item.videoUrl || item.downloadUrl || item.url || item.mp4Url || item.fileUrl;
+            if (sku && url && isLikelyVideoUrl(url)) {
+              results.push({ sku: String(sku), url: String(url) });
+            }
+          }
+        }
+        if (results.length > 0) {
+          log("content:extracted_from_path", { path, count: results.length });
+          return results;
+        }
+      } else if (target && typeof target === 'object') {
+        // 如果是对象，尝试提取所有字段中的URL
+        for (const [key, value] of Object.entries(target)) {
+          if (value && typeof value === 'object') {
+            const sku = value.sku || value.skuId || value.id || key;
+            const url = value.videoUrl || value.downloadUrl || value.url || value.mp4Url || value.fileUrl;
+            if (sku && url && isLikelyVideoUrl(url)) {
+              results.push({ sku: String(sku), url: String(url) });
+            }
+          }
+        }
+        if (results.length > 0) {
+          log("content:extracted_from_object", { path, count: results.length });
+          return results;
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+  
+  return results.length > 0 ? results : null;
+}
+
+// 调用existsPlayUrl接口获取视频URL（备用方案）
+async function fetchVideoUrlFromExistsPlayUrl(explainId, sku) {
+  try {
+    const apiUrl = `https://drlives.jd.com/console/live/existsPlayUrl?liveId=${explainId}`;
+    
+    log("content:fetching_existsPlayUrl", { explainId, apiUrl });
+    
+    const response = await fetch(apiUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Referer': window.location.href
+      },
+      credentials: 'include'
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      const videoUrl = extractUrlFromJsonResponse(data);
+      if (videoUrl) {
+        log("content:found_url_from_existsPlayUrl", { explainId, url: videoUrl.substring(0, 100) });
+        return videoUrl;
+      }
+    }
+  } catch (e) {
+    log("content:existsPlayUrl_error", { error: e.message });
+  }
+  
+  return null;
+}
+
+// 从JSON响应中提取视频URL
+function extractUrlFromJsonResponse(data) {
+  if (!data || typeof data !== 'object') return null;
+  
+  // 常见的响应格式
+  const urlPaths = [
+    'data.downloadUrl',
+    'data.videoUrl',
+    'data.url',
+    'downloadUrl',
+    'videoUrl',
+    'url',
+    'data.fileUrl',
+    'data.mp4Url'
+  ];
+  
+  for (const path of urlPaths) {
+    const keys = path.split('.');
+    let value = data;
+    for (const key of keys) {
+      if (value && typeof value === 'object' && key in value) {
+        value = value[key];
+      } else {
+        value = null;
+        break;
+      }
+    }
+    if (value && typeof value === 'string' && isLikelyVideoUrl(value)) {
+      return value;
+    }
+  }
+  
+  // 递归查找
+  return extractUrlFromObject(data, null);
+}
+
+// 尝试从页面数据中获取视频URL（方案2：不点击）
+async function tryExtractVideoUrlFromPage(sku) {
+  try {
+    // 方法1：尝试从inject.js的预加载API响应中获取
+    if (window.__jdvideoGetPreloadVideoUrl) {
+      try {
+        const url = window.__jdvideoGetPreloadVideoUrl(sku);
+        if (url) {
+          log("content:found_url_from_preload_api", { sku, url: url.substring(0, 100) });
+          return url;
+        }
+      } catch (e) {
+        log("content:preload_api_error", { error: e.message });
+      }
+    }
+    
+    // 方法2：从页面URL中提取explain ID，然后主动调用接口
+    // 注意：这个现在是同步的，接口调用在autoCaptureUrls中批量执行
+    const urlParams = new URLSearchParams(window.location.search);
+    const explainId = urlParams.get("id");
+    
+    if (explainId && sku) {
+      log("content:will_try_fetch_from_api", { explainId, sku });
+      // 接口调用将在autoCaptureUrls中批量执行
+    }
+    
+    // 方法2：查找页面中的JavaScript数据对象
+    // 很多单页应用会在window或全局对象中存储数据
+    const possibleDataKeys = [
+      'window.__INITIAL_STATE__',
+      'window.__APP_DATA__',
+      'window.appData',
+      'window.pageData',
+      'window.videoData',
+      'window.downloadData'
+    ];
+    
+    for (const key of possibleDataKeys) {
+      try {
+        const value = eval(key);
+        if (value && typeof value === 'object') {
+          const videoUrl = extractUrlFromObject(value, sku);
+          if (videoUrl) {
+            log("content:found_url_in_global_data", { key, sku, url: videoUrl });
+            return videoUrl;
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+    
+    // 方法3：查找DOM中的data属性
+    const dataElements = document.querySelectorAll('[data-video-url], [data-download-url], [data-url]');
+    for (const el of dataElements) {
+      const url = el.getAttribute('data-video-url') || 
+                  el.getAttribute('data-download-url') || 
+                  el.getAttribute('data-url');
+      if (url && isLikelyVideoUrl(url)) {
+        log("content:found_url_in_data_attribute", { sku, url });
+        return url;
+      }
+    }
+    
+    // 方法4：查找页面中所有可能的视频URL链接
+    const links = document.querySelectorAll('a[href*=".mp4"], a[href*="transcode"], a[href*="video"]');
+    for (const link of links) {
+      const href = link.getAttribute('href');
+      if (href && isLikelyVideoUrl(href)) {
+        log("content:found_url_in_link", { sku, url: href });
+        return href;
+      }
+    }
+    
+  } catch (e) {
+    log("content:extract_video_url_error", { error: e.message });
+  }
+  
+  return null;
+}
+
+// 从对象中递归查找视频URL
+function extractUrlFromObject(obj, targetSku) {
+  if (!obj || typeof obj !== 'object') return null;
+  
+  // 如果是数组，遍历查找
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const found = extractUrlFromObject(item, targetSku);
+      if (found) return found;
+    }
+    return null;
+  }
+  
+  // 查找包含sku或id的字段，匹配目标SKU
+  const skuKeys = ['sku', 'skuId', 'id', 'productId'];
+  let matchesTarget = false;
+  for (const key of skuKeys) {
+    if (obj[key] && String(obj[key]) === String(targetSku)) {
+      matchesTarget = true;
+      break;
+    }
+  }
+  
+  // 如果匹配到目标SKU，查找URL字段
+  if (matchesTarget) {
+    const urlKeys = ['videoUrl', 'downloadUrl', 'url', 'mp4Url', 'fileUrl'];
+    for (const key of urlKeys) {
+      if (obj[key] && typeof obj[key] === 'string' && isLikelyVideoUrl(obj[key])) {
+        return obj[key];
+      }
+    }
+  }
+  
+  // 递归查找子对象
+  for (const key of Object.keys(obj)) {
+    if (key !== 'parent' && key !== 'children') { // 避免循环引用
+      const found = extractUrlFromObject(obj[key], targetSku);
+      if (found) return found;
+    }
+  }
+  
+  return null;
+}
+
+// 判断是否是视频URL
+function isLikelyVideoUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  const lower = url.toLowerCase();
+  return lower.includes('.mp4') || 
+         lower.includes('.m3u8') || 
+         lower.includes('transcode') ||
+         lower.includes('video') ||
+         lower.includes('download');
+}
+
 function parseItems() {
+  console.log("[content] parseItems 开始执行");
   log("content:parse_start");
   const nodes = document.querySelectorAll(".antd-pro-pages-explain-components-table-list-goodsInfoContent");
   const results = [];
@@ -105,22 +444,91 @@ function parseItems() {
     if (downloadBtn) {
       state.buttonMap.set(sku, downloadBtn);
     }
-    let videoUrl = readUrlFromButton(downloadBtn);
+    
+    // 方案2：尝试从页面数据中提取视频URL（不点击）
+    // 优先从inject.js的预加载响应中获取（特别是 live_pc_getPageSkuVideo 接口）
+    let videoUrl = null;
+    
+    // 方法1：从预加载的批量响应中获取（最优先）
+    if (window.__jdvideoGetAllPreloadResponses) {
+      try {
+        const allSkuVideos = window.__jdvideoGetAllPreloadResponses();
+        console.log("[content] parseItems 检查预加载数据:", { sku, totalSkuVideos: allSkuVideos.length, allSkus: allSkuVideos.map(r => r.sku) });
+        log("content:parse_checking_preload", { sku, totalSkuVideos: allSkuVideos.length, allSkus: allSkuVideos.map(r => r.sku) });
+        const matched = allSkuVideos.find(item => item.sku === sku);
+        if (matched && matched.url) {
+          videoUrl = String(matched.url); // 确保是字符串
+          console.log("[content] parseItems 找到匹配的URL:", { sku, url: videoUrl.substring(0, 100) });
+          log("content:parse_found_url_from_preload", { sku, url: videoUrl.substring(0, 100) });
+          // 保存到capturedUrls
+          state.capturedUrls.set(sku, {
+            url: videoUrl,
+            headers: baseHeaders
+          });
+        } else {
+          console.log("[content] parseItems 未找到匹配的SKU:", { sku, availableSkus: allSkuVideos.map(r => r.sku) });
+          log("content:parse_no_match_in_preload", { sku, availableSkus: allSkuVideos.map(r => r.sku) });
+        }
+      } catch (e) {
+        console.error("[content] parseItems 预加载数据提取错误:", e);
+        log("content:parse_preload_error", { error: e.message, stack: e.stack });
+      }
+    } else {
+      console.warn("[content] parseItems: __jdvideoGetAllPreloadResponses 函数不可用");
+      log("content:parse_preload_function_not_available", { sku });
+    }
+    
+    // 方法2：从单个预加载响应中获取（注意：这是同步的，不返回Promise）
+    if (!videoUrl) {
+      // tryExtractVideoUrlFromPage 是 async 函数，但在 parseItems 中我们同步调用
+      // 所以这里不应该直接调用，应该跳过或使用同步方式
+      // videoUrl = tryExtractVideoUrlFromPage(sku); // 这会导致返回 Promise
+    }
+    
+    // 如果方案2没找到，尝试从按钮中读取
+    if (!videoUrl) {
+      videoUrl = readUrlFromButton(downloadBtn);
+    }
+    
+    // 检查是否已经捕获过
     const captured = state.capturedUrls.get(sku);
     const headers = captured?.headers || baseHeaders;
     if (captured?.url) {
       videoUrl = captured.url;
     }
+    
     if (downloadBtn) {
       attachClickHook(downloadBtn, sku);
     }
+    // 确保 videoUrl 是字符串或null（绝对不能是 Promise）
+    let finalVideoUrl = null;
+    if (videoUrl) {
+      // 如果是 Promise，直接设为 null（Promise 不应该出现在这里）
+      if (videoUrl instanceof Promise) {
+        console.error("[content] parseItems: videoUrl 是 Promise，这是错误的！", sku);
+        log("content:parse_videourl_is_promise", { sku });
+        finalVideoUrl = null;
+      } else if (typeof videoUrl === 'string') {
+        finalVideoUrl = videoUrl.trim();
+      } else if (typeof videoUrl === 'object' && videoUrl !== null) {
+        // 如果是对象，尝试提取url字段
+        finalVideoUrl = videoUrl.url || videoUrl.videoUrl || videoUrl.src || String(videoUrl).trim();
+      } else {
+        finalVideoUrl = String(videoUrl).trim();
+      }
+      // 如果提取后是空字符串，设为null
+      if (finalVideoUrl === '' || finalVideoUrl === 'undefined' || finalVideoUrl === 'null') {
+        finalVideoUrl = null;
+      }
+    }
+    
     results.push({
       sku,
       title,
-      videoUrl,
+      videoUrl: finalVideoUrl,
       headers,
       hasDownloadButton: Boolean(downloadBtn),
-      extractedFromDom: Boolean(videoUrl)
+      extractedFromDom: Boolean(finalVideoUrl)
     });
   });
   state.items = results;
@@ -130,12 +538,13 @@ function parseItems() {
 
 async function autoCaptureUrls(options) {
   try {
-    // 方案B：自动点击按钮触发接口，然后拦截视频URL
+    // 方案2优先：先尝试从页面数据中提取（不点击）
+    // 如果失败，再使用方案B：自动点击按钮触发接口
     const clickDelay = 2000; // 点击后等待时间（等待fetch请求完成）
     const clickRetries = 2; // 每个按钮最多重试2次
     let success = 0;
 
-    log("content:auto_capture_start_auto_click", { clickDelay, clickRetries });
+    log("content:auto_capture_start_scheme2_first", { clickDelay, clickRetries });
     
     // 确保注入脚本已加载
     ensureInject();
@@ -143,18 +552,84 @@ async function autoCaptureUrls(options) {
     
     // 解析列表，获取所有SKU
     const initialItems = parseItems();
-    let targets = initialItems.filter((item) => !item.videoUrl && state.buttonMap.get(item.sku));
-    const initialSkus = targets.map(item => item.sku);
     
-    if (targets.length === 0) {
-      log("content:auto_capture_no_targets");
+    // 方案2：批量调用接口获取所有商品的视频URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const explainId = urlParams.get("id");
+    const missingItems = initialItems.filter((item) => !item.videoUrl);
+    
+    if (explainId && missingItems.length > 0) {
+      log("content:scheme2_fetch_all_sku_videos", { explainId, missingCount: missingItems.length });
+      
+      // 方法1：先从inject.js的预加载响应中获取（如果页面加载时已经调用了接口）
+      let allSkuVideos = [];
+      if (window.__jdvideoGetAllPreloadResponses) {
+        try {
+          allSkuVideos = window.__jdvideoGetAllPreloadResponses();
+          log("content:scheme2_from_preload", { count: allSkuVideos.length });
+        } catch (e) {
+          log("content:scheme2_preload_error", { error: e.message });
+        }
+      }
+      
+      // 方法2：如果预加载没有数据，尝试主动调用 live_pc_getPageSkuVideo 接口
+      if (allSkuVideos.length === 0) {
+        log("content:scheme2_trying_active_api_call");
+        const apiSkuVideos = await fetchAllSkuVideosFromApi(explainId);
+        if (apiSkuVideos && apiSkuVideos.length > 0) {
+          allSkuVideos = apiSkuVideos;
+        }
+      }
+      
+      // 保存获取到的视频URL
+      if (allSkuVideos && allSkuVideos.length > 0) {
+        for (const { sku, url } of allSkuVideos) {
+          state.capturedUrls.set(sku, {
+            url: url,
+            headers: buildHeaders()
+          });
+          log("content:scheme2_sku_video_saved", { sku, url: url.substring(0, 100) });
+        }
+        log("content:scheme2_batch_success", { count: allSkuVideos.length });
+      } else {
+        // 方法3：如果批量接口失败，尝试调用 existsPlayUrl（备用方案，但可能无法区分SKU）
+        log("content:scheme2_batch_failed_trying_existsPlayUrl");
+        const existsUrl = await fetchVideoUrlFromExistsPlayUrl(explainId);
+        if (existsUrl) {
+          log("content:scheme2_existsPlayUrl_found", { url: existsUrl.substring(0, 100), note: "但无法确定对应哪个SKU" });
+        }
+      }
+    }
+    
+    // 重新解析，这次应该包含从接口获取的URL
+    const itemsAfterApi = parseItems();
+    const extractedByApi = itemsAfterApi.filter((item) => item.videoUrl).length;
+    
+    if (extractedByApi > 0) {
+      log("content:scheme2_api_extracted_urls", { count: extractedByApi });
+    }
+    
+    // 如果方案2（API调用）已经全部提取到，直接返回
+    const stillMissing = itemsAfterApi.filter((item) => !item.videoUrl && state.buttonMap.get(item.sku));
+    if (stillMissing.length === 0) {
+      log("content:all_urls_extracted_by_scheme2_api");
       return {
         ok: true,
-        successCount: initialItems.filter(i => i.videoUrl).length,
-        totalTried: initialItems.length,
-        items: initialItems
+        successCount: itemsAfterApi.filter(i => i.videoUrl).length,
+        totalTried: itemsAfterApi.length,
+        items: itemsAfterApi
       };
     }
+    
+    // 方案2（API调用）未完全成功，继续使用方案B（自动点击）
+    log("content:scheme2_api_partial_success", { 
+      extracted: extractedByApi, 
+      missing: stillMissing.length,
+      falling_back_to_click: true 
+    });
+    
+    let targets = stillMissing;
+    const initialSkus = targets.map(item => item.sku);
     
     // 通知background进入捕获模式（用于拦截浏览器下载）
     if (initialSkus.length > 0) {

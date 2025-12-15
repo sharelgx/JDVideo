@@ -24,6 +24,72 @@ function bindEvents() {
   document.getElementById("openManager").addEventListener("click", () => {
     chrome.runtime.openOptionsPage();
   });
+  document.getElementById("testPage1")?.addEventListener("click", () => injectTestPage(1));
+  document.getElementById("testPage2")?.addEventListener("click", () => injectTestPage(2));
+  document.getElementById("testReset")?.addEventListener("click", resetTestAccumulator);
+}
+
+async function injectTestPage(pageNo) {
+  if (!activeTabId) {
+    setInfo("未找到活动标签页");
+    return;
+  }
+  const pageSize = 10;
+  const start = (pageNo - 1) * pageSize + 1;
+  const pageItems = [];
+  for (let i = 0; i < pageSize; i++) {
+    const n = start + i;
+    const sku = `TESTSKU${String(n).padStart(4, "0")}`;
+    pageItems.push({
+      sku,
+      title: `分页测试商品-${n}`,
+      // 分页累计测试不需要真实下载地址，避免误点“批量下载”触发无效下载
+      videoUrl: null,
+      hasDownloadButton: true
+    });
+  }
+
+  setInfo(`注入测试页${pageNo}…`);
+  log("popup:test_inject_page", { pageNo, pageSize });
+  const res = await chrome.tabs.sendMessage(activeTabId, {
+    type: "TEST_SET_PAGE_ITEMS",
+    explainId: "test-explain",
+    pageItems
+  });
+
+  if (!res || res?.error || res?.ok === false) {
+    setInfo(`注入失败：${res?.error || "未知错误"}`);
+    return;
+  }
+
+  currentItems = (res?.items || []).map((item) => ({
+    ...item,
+    status: item.videoUrl ? "ready" : "待捕获"
+  }));
+  renderList();
+  updateStats();
+  setInfo(`测试注入完成：累计 ${currentItems.length} 条`);
+}
+
+async function resetTestAccumulator() {
+  if (!activeTabId) {
+    setInfo("未找到活动标签页");
+    return;
+  }
+  setInfo("清空累计中…");
+  log("popup:test_reset_accumulator");
+  const res = await chrome.tabs.sendMessage(activeTabId, {
+    type: "TEST_RESET_ACCUMULATOR",
+    explainId: "test-explain"
+  });
+  if (!res || res?.ok === false) {
+    setInfo(`清空失败：${res?.error || "未知错误"}`);
+    return;
+  }
+  currentItems = [];
+  renderList();
+  updateStats();
+  setInfo("已清空累计");
 }
 
 async function refreshItems() {

@@ -33,6 +33,74 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     return true;
   }
+  // ====== 测试：分页累计（不依赖真实DOM分页）======
+  if (message?.type === "TEST_SET_PAGE_ITEMS") {
+    try {
+      const pageItems = Array.isArray(message.pageItems) ? message.pageItems : [];
+      const explainId = message.explainId ?? "test-explain";
+      const reset = Boolean(message.reset);
+
+      if (reset || state.explainId !== explainId) {
+        state.explainId = explainId;
+        state.allItemsBySku.clear();
+        state.allSkuOrder = [];
+        log("content:test_accumulate_reset", { explainId });
+      }
+
+      const baseHeaders = buildHeaders();
+      const pageResults = pageItems.map((it, idx) => ({
+        sku: String(it?.sku ?? `test-${idx + 1}`),
+        title: String(it?.title ?? `测试商品${idx + 1}`),
+        videoUrl: it?.videoUrl ? String(it.videoUrl) : null,
+        headers: it?.headers || baseHeaders,
+        hasDownloadButton: Boolean(it?.hasDownloadButton ?? true),
+        extractedFromDom: false
+      }));
+
+      for (const item of pageResults) {
+        const sku = item.sku;
+        if (!sku) continue;
+        const prev = state.allItemsBySku.get(sku);
+        if (!prev) {
+          state.allItemsBySku.set(sku, item);
+          state.allSkuOrder.push(sku);
+          continue;
+        }
+        const mergedTitle =
+          (prev.title && prev.title.length >= (item.title || "").length) ? prev.title : item.title;
+        const mergedVideoUrl = prev.videoUrl || item.videoUrl || null;
+        state.allItemsBySku.set(sku, {
+          ...prev,
+          ...item,
+          title: mergedTitle,
+          videoUrl: mergedVideoUrl,
+          headers: prev.headers || item.headers || baseHeaders,
+          hasDownloadButton: Boolean(prev.hasDownloadButton || item.hasDownloadButton)
+        });
+      }
+
+      const mergedResults = state.allSkuOrder
+        .map((sku) => state.allItemsBySku.get(sku))
+        .filter(Boolean);
+
+      state.items = mergedResults;
+      log("content:test_set_page_items_done", { pageCount: pageResults.length, totalCount: mergedResults.length });
+      sendResponse({ ok: true, items: mergedResults });
+    } catch (e) {
+      sendResponse({ ok: false, items: [], error: e?.message || String(e) });
+    }
+    return true;
+  }
+  if (message?.type === "TEST_RESET_ACCUMULATOR") {
+    const explainId = message.explainId ?? "test-explain";
+    state.explainId = explainId;
+    state.allItemsBySku.clear();
+    state.allSkuOrder = [];
+    state.items = [];
+    log("content:test_accumulate_reset", { explainId });
+    sendResponse({ ok: true });
+    return true;
+  }
   if (message?.type === "AUTO_CAPTURE_URLS") {
     autoCaptureUrls(message.options || {})
       .then((result) => sendResponse(result))

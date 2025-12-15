@@ -29,13 +29,14 @@ async function loadDirectory() {
   try {
     const res = await chrome.runtime.sendMessage({ type: "GET_DOWNLOAD_DIRECTORY" });
     const directory = res?.directory || null;
+    const confirmed = Boolean(res?.confirmed);
     const input = document.getElementById("downloadDirectory");
     if (directory) {
       input.value = directory;
       input.placeholder = "";
     } else {
       input.value = "";
-      input.placeholder = "未设置（首次下载时会提示选择）";
+      input.placeholder = confirmed ? "已确认（使用浏览器默认下载目录）" : "未设置（首次下载时会提示选择）";
     }
   } catch (e) {
     console.error("Failed to load directory:", e);
@@ -52,6 +53,8 @@ async function clearDirectory() {
       type: "SET_DOWNLOAD_DIRECTORY",
       directory: null
     });
+    // 同时清除“已确认”标记
+    await chrome.storage.local.set({ downloadDirectoryConfirmed: false });
     setDirectoryInfo("✓ 目录设置已清除", "success");
     await loadDirectory();
     log("manager:directory_cleared");

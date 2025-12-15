@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "JD Live Video Downloader",
   "description": "在京东直播讲解页解析并下载商品视频，命名为 SKUID_[标题名].mp4。",
-  "version": "0.1.0",
+  "version": "1.32.0",
   "permissions": [
     "downloads",
     "scripting",

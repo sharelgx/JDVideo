@@ -53,7 +53,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         title: String(it?.title ?? `测试商品${idx + 1}`),
         videoUrl: it?.videoUrl ? String(it.videoUrl) : null,
         headers: it?.headers || baseHeaders,
-        hasDownloadButton: Boolean(it?.hasDownloadButton ?? true),
+        // 测试默认不启用“可下载”按钮，避免误触发批量下载/自动捕获逻辑
+        hasDownloadButton: Boolean(it?.hasDownloadButton ?? false),
         extractedFromDom: false
       }));
 

@@ -45,7 +45,8 @@ async function injectTestPage(pageNo) {
       title: `分页测试商品-${n}`,
       // 分页累计测试不需要真实下载地址，避免误点“批量下载”触发无效下载
       videoUrl: null,
-      hasDownloadButton: true
+      // 避免用户点击“批量下载”时弹出“待捕获”提示（测试只关注累计数量）
+      hasDownloadButton: false
     });
   }
 

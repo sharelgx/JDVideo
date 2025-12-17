@@ -38,6 +38,10 @@ const capturingSkus = new Set();
 // 追踪捕获模式下创建的下载，用于拦截
 const captureModeDownloads = new Map(); // downloadId -> { sku, url, timestamp }
 
+// 追踪插件自己发起的下载，用于在 onDeterminingFilename 强制落到子目录 + 在 onChanged 记录最终路径
+const pendingDesiredByUrl = new Map(); // url -> string[] (FIFO)
+const ownedDownloadDesired = new Map(); // downloadId -> { url, desiredFilename }
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "START_DOWNLOADS") {
     const { items = [], options = {} } = message;
@@ -189,6 +193,13 @@ chrome.downloads.onChanged.addListener((delta) => {
   try {
     const downloadId = delta?.id;
     if (!downloadId) return;
+    // 记录插件自发下载的最终落盘路径（用于定位“为什么没进子目录”）
+    if (delta?.filename?.current && ownedDownloadDesired.has(downloadId)) {
+      const finalPath = String(delta.filename.current);
+      const desired = ownedDownloadDesired.get(downloadId)?.desiredFilename || null;
+      log("bg:download_final_path", { downloadId, desiredFilename: desired, finalPath });
+    }
+
     const isSelectionDownload =
       pendingDirectoryExtractions.has(downloadId) ||
       (directorySelectionInProgress && directorySelectionDownloadId && downloadId === directorySelectionDownloadId);
@@ -354,6 +365,18 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
     mimeType: downloadItem.mimeType,
     state: downloadItem.state
   });
+
+  // 将“即将发起”的期望文件名绑定到 downloadId（用于强制子目录）
+  try {
+    const list = pendingDesiredByUrl.get(downloadUrl);
+    if (list && list.length > 0) {
+      const desiredFilename = list.shift();
+      if (list.length) pendingDesiredByUrl.set(downloadUrl, list);
+      else pendingDesiredByUrl.delete(downloadUrl);
+      ownedDownloadDesired.set(downloadId, { url: downloadUrl, desiredFilename });
+      log("bg:owned_download_bound", { downloadId, desiredFilename });
+    }
+  } catch (e) {}
   
   // 如果是在捕获模式下，立即拦截（不等待onDeterminingFilename）
   if (captureMode && capturingSkus.size > 0) {
@@ -535,6 +558,18 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
     }
   }
   
+  // ========== 优先级3：强制插件自发下载落到子目录 ==========
+  try {
+    if (!captureMode && savedDownloadSubdir && ownedDownloadDesired.has(downloadId)) {
+      const desired = ownedDownloadDesired.get(downloadId)?.desiredFilename;
+      if (desired && typeof desired === "string") {
+        log("bg:suggest_desired_filename", { downloadId, desired, current: downloadItem.filename });
+        suggest({ filename: desired });
+        return;
+      }
+    }
+  } catch (e) {}
+
   // ========== 允许下载继续 ==========
   // 不要强行覆盖 filename：否则会把 downloads.download({ filename: "子目录/文件.mp4" }) 的路径抹掉，
   // 导致实际下载落回默认目录。
@@ -629,6 +664,12 @@ function downloadWithCandidates({ url, candidates, saveAs }) {
         return;
       }
       const filename = candidates[i++];
+      // 记录“即将发起”的期望文件名（用 url 做关联，onCreated 会把它绑定到 downloadId）
+      try {
+        const list = pendingDesiredByUrl.get(url) || [];
+        list.push(filename);
+        pendingDesiredByUrl.set(url, list);
+      } catch (e) {}
       log("bg:download_attempt", {
         idx: i,
         filename,
@@ -642,8 +683,20 @@ function downloadWithCandidates({ url, candidates, saveAs }) {
           if (chrome.runtime.lastError) {
             const msg = chrome.runtime.lastError.message || "";
             log("bg:download_attempt_failed", { filename, error: msg });
+            // 失败：移除刚刚 push 的期望值（避免 onCreated 误绑定）
+            try {
+              const list2 = pendingDesiredByUrl.get(url) || [];
+              const idx2 = list2.indexOf(filename);
+              if (idx2 >= 0) list2.splice(idx2, 1);
+              if (list2.length) pendingDesiredByUrl.set(url, list2);
+              else pendingDesiredByUrl.delete(url);
+            } catch (e) {}
             tryNext(new Error(msg));
           } else {
+            // 成功：downloadId 会在 onCreated 里绑定 desiredFilename；这里也兜底写一次
+            try {
+              ownedDownloadDesired.set(downloadId, { url, desiredFilename: filename });
+            } catch (e) {}
             resolve(downloadId);
           }
         }

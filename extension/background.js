@@ -54,13 +54,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     savedDownloadDirectory = message.directory || null;
     if (typeof message.subdir === "string") {
       savedDownloadSubdir = message.subdir || null;
+    } else if (!savedDownloadDirectory) {
+      // 清空目录时也必须清空子目录（否则 UI 会一直显示旧的 Downloads/xxx）
+      savedDownloadSubdir = null;
     }
     disableDirectoryPrefixForFilename = false;
-    hasConfirmedDownloadLocation = Boolean(savedDownloadDirectory);
+    hasConfirmedDownloadLocation = Boolean(savedDownloadSubdir);
     chrome.storage.local.set({
       downloadDirectory: savedDownloadDirectory,
       downloadSubdir: savedDownloadSubdir,
-      downloadDirectoryConfirmed: Boolean(savedDownloadDirectory)
+      downloadDirectoryConfirmed: Boolean(savedDownloadSubdir),
+      downloadDirectorySelectionInProgress: false,
+      downloadDirectorySelectionDownloadId: null
     });
     log("bg:directory_saved", { directory: savedDownloadDirectory });
     sendResponse({ ok: true, directory: savedDownloadDirectory });
@@ -71,7 +76,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     chrome.storage.local.get(["downloadDirectory", "downloadSubdir", "downloadDirectoryConfirmed"]).then((result) => {
       savedDownloadDirectory = result.downloadDirectory || null;
       savedDownloadSubdir = result.downloadSubdir || null;
-      hasConfirmedDownloadLocation = Boolean(result.downloadDirectoryConfirmed) || Boolean(savedDownloadDirectory);
+      hasConfirmedDownloadLocation = Boolean(result.downloadSubdir) && Boolean(result.downloadDirectoryConfirmed);
       // 一旦使用相对子目录，就不需要“绝对路径前缀禁用”兜底
       if (savedDownloadSubdir) disableDirectoryPrefixForFilename = false;
       sendResponse({

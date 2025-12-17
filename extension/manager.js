@@ -29,9 +29,13 @@ async function loadDirectory() {
   try {
     const res = await chrome.runtime.sendMessage({ type: "GET_DOWNLOAD_DIRECTORY" });
     const directory = res?.directory || null;
+    const subdir = res?.subdir || null;
     const confirmed = Boolean(res?.confirmed);
     const input = document.getElementById("downloadDirectory");
-    if (directory) {
+    if (subdir) {
+      input.value = `Downloads/${subdir}`;
+      input.placeholder = "";
+    } else if (directory) {
       input.value = directory;
       input.placeholder = "";
     } else {
@@ -51,10 +55,16 @@ async function clearDirectory() {
   try {
     await chrome.runtime.sendMessage({
       type: "SET_DOWNLOAD_DIRECTORY",
-      directory: null
+      directory: null,
+      subdir: null
     });
-    // 同时清除“已确认”标记
-    await chrome.storage.local.set({ downloadDirectoryConfirmed: false });
+    // 同时清除“已确认/选择中”等标记（兜底）
+    await chrome.storage.local.set({
+      downloadDirectoryConfirmed: false,
+      downloadSubdir: null,
+      downloadDirectorySelectionInProgress: false,
+      downloadDirectorySelectionDownloadId: null
+    });
     setDirectoryInfo("✓ 目录设置已清除", "success");
     await loadDirectory();
     log("manager:directory_cleared");

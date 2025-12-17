@@ -60,7 +60,7 @@ h1 {
 }
 
 #autoCapture {
-  display: none; /* 隐藏自动捕获URL按钮，功能保留 */
+  display: inline-flex; /* 显示：由用户手动触发，避免自动下载 */
 }
 
 .card.inline {

@@ -120,7 +120,7 @@ async function startDownload() {
     if (allSuccess.length > 0 && allSuccess.length === currentItems.filter(i => i.videoUrl).length) {
       setInfo(`✅ 全部已下载完成 (${allSuccess.length})`);
     } else if (pending.length > 0) {
-      setInfo(`还有 ${pending.length} 条待捕获，请等待自动捕获完成`);
+      setInfo(`还有 ${pending.length} 条待捕获：请先点击“自动捕获 URL”，或在页面手动点一次下载按钮后再“解析列表”`);
     } else {
       setInfo("没有需要下载的项");
     }
@@ -128,6 +128,16 @@ async function startDownload() {
     return;
   }
   
+  // 首次下载目录提示（由后台决定是否弹出 saveAs 目录选择）
+  try {
+    const dirRes = await chrome.runtime.sendMessage({ type: "GET_DOWNLOAD_DIRECTORY" });
+    if (!dirRes?.confirmed) {
+      setInfo(`首次下载将弹出目录选择窗口（仅一次）…`);
+    }
+  } catch (e) {
+    // ignore
+  }
+
   setInfo(`开始下载 ${needDownload.length} 条...`);
   log("popup:start_download", { count: needDownload.length });
   

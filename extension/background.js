@@ -45,7 +45,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     savedDownloadDirectory = message.directory || null;
     disableDirectoryPrefixForFilename = false;
     hasConfirmedDownloadLocation = Boolean(savedDownloadDirectory);
-    chrome.storage.local.set({ downloadDirectory: savedDownloadDirectory });
+    chrome.storage.local.set({
+      downloadDirectory: savedDownloadDirectory,
+      downloadDirectoryConfirmed: Boolean(savedDownloadDirectory)
+    });
     log("bg:directory_saved", { directory: savedDownloadDirectory });
     sendResponse({ ok: true, directory: savedDownloadDirectory });
     return true;
@@ -294,19 +297,14 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
   if (pendingDirectoryExtractions.has(downloadId)) {
     // 从完整路径中提取目录
     const fullPath = downloadItem.filename;
-    // 只要能走到这里，说明用户已进入过保存流程；标记“已确认过位置”
-    if (!hasConfirmedDownloadLocation) {
-      hasConfirmedDownloadLocation = true;
-      chrome.storage.local.set({ downloadDirectoryConfirmed: true });
-      log("bg:download_location_confirmed_onDeterminingFilename", { downloadId, fullPath: String(fullPath || "").substring(0, 120) });
-    }
     if (fullPath && (fullPath.includes("/") || fullPath.includes("\\"))) {
       const dirMatch = fullPath.match(/^(.+)[\\/][^\\/]+$/);
       if (dirMatch && dirMatch[1]) {
         let selectedDir = dirMatch[1];
         selectedDir = selectedDir.replace(/\\/g, "/");
         savedDownloadDirectory = selectedDir;
-        chrome.storage.local.set({ downloadDirectory: selectedDir });
+        hasConfirmedDownloadLocation = true;
+        chrome.storage.local.set({ downloadDirectory: selectedDir, downloadDirectoryConfirmed: true });
         log("bg:directory_selected", { directory: selectedDir, fullPath });
         pendingDirectoryExtractions.delete(downloadId);
         
@@ -321,6 +319,8 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
       isWaitingForDirectorySelection = false;
       directorySelectionPromise = null;
       isCreatingDirectorySelectionPromise = false;
+      hasConfirmedDownloadLocation = false;
+      chrome.storage.local.set({ downloadDirectoryConfirmed: false });
     }
   }
   

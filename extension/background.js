@@ -28,6 +28,7 @@ const DIRECTORY_SELECTION_TIMEOUT_MS = 180000; // 3分钟
 // MV3 service worker 可能被挂起/重启：用 storage 持久化“目录选择进行中”，避免重复弹窗
 let directorySelectionInProgress = false;
 let directorySelectionDownloadId = null;
+let directorySelectionPurpose = null; // "first_download" | "manual_pick"
 
 // 捕获模式：用于拦截自动捕获时触发的下载
 let captureMode = false;
@@ -66,6 +67,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       hasConfirmedDownloadLocation = Boolean(result.downloadDirectoryConfirmed) || Boolean(savedDownloadDirectory);
       sendResponse({ ok: true, directory: savedDownloadDirectory, confirmed: hasConfirmedDownloadLocation });
     });
+    return true;
+  }
+  if (message?.type === "PICK_DOWNLOAD_DIRECTORY") {
+    // 手动触发目录选择：用于强制前置步骤（解析/下载前必须完成）
+    pickDownloadDirectory()
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: error?.message || String(error) }));
     return true;
   }
   if (message?.type === "GET_LOGS") {
@@ -124,6 +132,7 @@ chrome.storage.local
   hasConfirmedDownloadLocation = Boolean(result.downloadDirectoryConfirmed) || Boolean(savedDownloadDirectory);
   directorySelectionInProgress = Boolean(result.downloadDirectorySelectionInProgress);
   directorySelectionDownloadId = result.downloadDirectorySelectionDownloadId || null;
+  directorySelectionPurpose = null;
 });
 
 // 监听下载项变化：用于在 saveAs=true 的首次下载中，等用户真正选完路径后提取目录。
@@ -150,6 +159,7 @@ chrome.downloads.onChanged.addListener((delta) => {
     if (directorySelectionInProgress) {
       directorySelectionInProgress = false;
       directorySelectionDownloadId = null;
+      directorySelectionPurpose = null;
       chrome.storage.local.set({
         downloadDirectorySelectionInProgress: false,
         downloadDirectorySelectionDownloadId: null
@@ -167,12 +177,78 @@ chrome.downloads.onChanged.addListener((delta) => {
         pendingDirectoryExtractions.delete(downloadId);
         isWaitingForDirectorySelection = false;
         log("bg:directory_selected_onChanged", { directory: savedDownloadDirectory, fullPath });
+
+        // 如果这是手动目录选择的占位下载，尽量清理下载记录/文件
+        try {
+          chrome.downloads.cancel(downloadId, () => {});
+          setTimeout(() => {
+            chrome.downloads.removeFile(downloadId, () => {});
+            chrome.downloads.erase({ id: downloadId }, () => {});
+          }, 800);
+        } catch (e) {}
       }
     }
   } catch (e) {
     // ignore
   }
 });
+
+async function pickDownloadDirectory() {
+  // 如果已确认，直接返回
+  if (hasConfirmedDownloadLocation) {
+    return { confirmed: true, directory: savedDownloadDirectory || null };
+  }
+  // 如果已经在进行中，直接等待完成
+  if (directorySelectionInProgress) {
+    await waitForDirectoryConfirmedFromStorage();
+    return { confirmed: true, directory: savedDownloadDirectory || null };
+  }
+
+  // 发起一个“占位下载”，仅用于触发保存对话框选择目录
+  const placeholderUrl = chrome.runtime.getURL("blank.txt");
+  directorySelectionPurpose = "manual_pick";
+  directorySelectionInProgress = true;
+  chrome.storage.local.set({
+    downloadDirectorySelectionInProgress: true,
+    downloadDirectorySelectionDownloadId: null
+  });
+
+  return new Promise((resolve, reject) => {
+    chrome.downloads.download(
+      {
+        url: placeholderUrl,
+        filename: "JDVideo_select_folder.txt",
+        conflictAction: "uniquify",
+        saveAs: true
+      },
+      (downloadId) => {
+        if (chrome.runtime.lastError) {
+          directorySelectionInProgress = false;
+          directorySelectionPurpose = null;
+          chrome.storage.local.set({
+            downloadDirectorySelectionInProgress: false,
+            downloadDirectorySelectionDownloadId: null,
+            downloadDirectoryConfirmed: false
+          });
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        directorySelectionDownloadId = downloadId;
+        pendingDirectoryExtractions.add(downloadId);
+        chrome.storage.local.set({
+          downloadDirectorySelectionInProgress: true,
+          downloadDirectorySelectionDownloadId: downloadId
+        });
+        log("bg:manual_pick_directory_download_created", { downloadId });
+
+        // 等待 confirmed 写入（由 onChanged 触发）
+        waitForDirectoryConfirmedFromStorage()
+          .then(() => resolve({ confirmed: true, directory: savedDownloadDirectory || null }))
+          .catch((e) => reject(e));
+      }
+    );
+  });
+}
 
 function waitForDirectoryConfirmedFromStorage() {
   return new Promise((resolve, reject) => {

@@ -1,0 +1,2 @@
+JDVideo placeholder file for directory selection. You can delete this after choosing a folder.
+

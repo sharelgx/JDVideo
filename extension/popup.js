@@ -9,7 +9,8 @@ async function init() {
   await resolveActiveTab();
   bindEvents();
   // 打开弹窗不做任何解析/下载动作：由用户点击“解析列表”开始
-  setInfo("点击“解析列表”开始解析");
+  await refreshDirectoryGate();
+  setInfo("先选择下载文件夹，然后点击“解析列表”开始解析");
   renderList();
   updateStats();
   chrome.runtime.onMessage.addListener(handleProgress);
@@ -27,11 +28,59 @@ function bindEvents() {
   document.getElementById("openManager").addEventListener("click", () => {
     chrome.runtime.openOptionsPage();
   });
+  document.getElementById("pickDir")?.addEventListener("click", pickDirectory);
+}
+
+async function refreshDirectoryGate() {
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "GET_DOWNLOAD_DIRECTORY" });
+    const confirmed = Boolean(res?.confirmed);
+    const dir = res?.directory || null;
+    const dirStatus = document.getElementById("dirStatus");
+    if (dirStatus) {
+      dirStatus.textContent = dir ? `下载目录：${dir}` : (confirmed ? "下载目录：已确认（使用默认下载目录）" : "下载目录：未设置");
+    }
+    // 强制前置：未确认目录时禁用解析/下载
+    const refreshBtn = document.getElementById("refresh");
+    const downloadBtn = document.getElementById("downloadAll");
+    if (refreshBtn) refreshBtn.disabled = !confirmed;
+    if (downloadBtn) downloadBtn.disabled = !confirmed;
+    return confirmed;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function pickDirectory() {
+  setInfo("请选择下载保存文件夹（只需一次）…");
+  log("popup:pick_directory_click");
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "PICK_DOWNLOAD_DIRECTORY" });
+    if (!res?.ok) {
+      setInfo(`选择失败：${res?.error || "未知错误"}`);
+      return;
+    }
+    // 等待后台写入 confirmed
+    for (let i = 0; i < 30; i++) {
+      const ok = await refreshDirectoryGate();
+      if (ok) break;
+      await wait(500);
+    }
+    const ok = await refreshDirectoryGate();
+    setInfo(ok ? "✅ 下载文件夹已设置，可以开始解析/下载" : "⚠️ 未检测到目录确认，请重试一次");
+  } catch (e) {
+    setInfo(`选择失败：${e?.message || String(e)}`);
+  }
 }
 
 async function refreshItems() {
   if (!activeTabId) {
     setInfo("未找到活动标签页");
+    return;
+  }
+  const gateOk = await refreshDirectoryGate();
+  if (!gateOk) {
+    setInfo("请先选择下载文件夹");
     return;
   }
   setInfo("解析中…");
@@ -111,6 +160,11 @@ function statusLabel(status) {
 }
 
 async function startDownload() {
+  const gateOk = await refreshDirectoryGate();
+  if (!gateOk) {
+    setInfo("请先选择下载文件夹");
+    return;
+  }
   // 筛选需要下载的项：有URL且未成功下载的
   const needDownload = currentItems.filter((item) => {
     return item.videoUrl && item.status !== "success" && item.status !== "downloading";

@@ -150,7 +150,7 @@ chrome.storage.local
   .then((result) => {
   savedDownloadDirectory = result.downloadDirectory || null;
   savedDownloadSubdir = result.downloadSubdir || null;
-  hasConfirmedDownloadLocation = Boolean(result.downloadDirectoryConfirmed) || Boolean(savedDownloadDirectory);
+  hasConfirmedDownloadLocation = Boolean(result.downloadDirectoryConfirmed) && Boolean(savedDownloadSubdir);
   if (savedDownloadSubdir) disableDirectoryPrefixForFilename = false;
   directorySelectionInProgress = Boolean(result.downloadDirectorySelectionInProgress);
   directorySelectionDownloadId = result.downloadDirectorySelectionDownloadId || null;
@@ -196,12 +196,8 @@ chrome.downloads.onChanged.addListener((delta) => {
     const fullPath = delta?.filename?.current;
     if (!fullPath || typeof fullPath !== "string") return;
 
-    // 只要 filename 有了最终值，就视为用户已经确认过保存位置（用于避免每个文件都弹框）
-    if (!hasConfirmedDownloadLocation) {
-      hasConfirmedDownloadLocation = true;
-      chrome.storage.local.set({ downloadDirectoryConfirmed: true });
-      log("bg:download_location_confirmed_onChanged", { downloadId, fullPath });
-    }
+    // 注意：不要在这里提前把 confirmed 置 true。
+    // 必须等到我们解析出 Downloads 下的 subdir 后，才能保证后续下载能落到指定文件夹。
 
     // 清理“目录选择进行中”标记
     if (directorySelectionInProgress) {
@@ -330,9 +326,9 @@ function waitForDirectoryConfirmedFromStorage() {
     const start = Date.now();
     const tick = () => {
       chrome.storage.local
-        .get(["downloadDirectoryConfirmed", "downloadDirectorySelectionInProgress"])
+        .get(["downloadDirectoryConfirmed", "downloadSubdir", "downloadDirectorySelectionInProgress"])
         .then((r) => {
-          const confirmed = Boolean(r.downloadDirectoryConfirmed);
+          const confirmed = Boolean(r.downloadDirectoryConfirmed) && Boolean(r.downloadSubdir);
           const inProg = Boolean(r.downloadDirectorySelectionInProgress);
           if (confirmed) return resolve(true);
           if (!inProg) return reject(new Error("目录选择已取消"));

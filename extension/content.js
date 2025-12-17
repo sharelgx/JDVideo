@@ -6,7 +6,8 @@ const state = {
   // 分页累计：跨页合并后的全量商品（按 SKU 去重）
   allItemsBySku: new Map(), // sku -> item
   allSkuOrder: [], // 按首次发现顺序保存 sku
-  explainId: null // 当前讲解页id（切换讲解页时自动清空累计）
+  explainId: null, // 当前讲解页id（切换讲解页时自动清空累计）
+  lastPageStats: null // { page, pageCount, missingCount }
 };
 
 console.log("[content] ========== content.js 已加载 ==========");
@@ -106,8 +107,28 @@ async function parseAllPages() {
   const firstPage = getActivePageNumber();
   const totalPages = getTotalPagesFromPagination();
 
-  // 先解析当前页（会更新累计映射）
-  parseItems();
+  async function parseCurrentPageWithRetries() {
+    // 页面切换后接口/渲染可能延迟，第一轮 parseItems 可能抓不到 URL；做有限次重试
+    let lastMissing = null;
+    for (let i = 0; i < 10; i++) {
+      parseItems();
+      const m = state.lastPageStats?.missingCount;
+      if (typeof m === "number") {
+        if (m === 0) return;
+        if (lastMissing !== null && m >= lastMissing) {
+          // 没继续变好，稍等一次后退出，避免无限等待
+          await wait(600);
+          parseItems();
+          return;
+        }
+        lastMissing = m;
+      }
+      await wait(600);
+    }
+  }
+
+  // 先解析当前页（带重试，更新累计映射）
+  await parseCurrentPageWithRetries();
 
   if (!totalPages || totalPages <= 1) {
     return state.items || [];
@@ -117,7 +138,7 @@ async function parseAllPages() {
   for (let p = 2; p <= totalPages; p++) {
     const ok = await goToPage(p);
     if (!ok) break;
-    parseItems();
+    await parseCurrentPageWithRetries();
   }
 
   // 尽量回到用户原本所在页，避免打断用户
@@ -640,6 +661,15 @@ function parseItems() {
       extractedFromDom: Boolean(finalVideoUrl)
     });
   });
+
+  // 记录当前页缺失情况（用于自动翻页解析时重试等待接口回填）
+  try {
+    const pageNum = getActivePageNumber();
+    const missingCount = pageResults.filter((x) => !x.videoUrl).length;
+    state.lastPageStats = { page: pageNum, pageCount: pageResults.length, missingCount };
+  } catch (e) {
+    // ignore
+  }
 
   // ========= 分页累计合并（按 SKU 去重）=========
   for (const item of pageResults) {

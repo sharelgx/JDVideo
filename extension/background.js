@@ -25,6 +25,10 @@ let isCreatingDirectorySelectionPromise = false;
 // 首次目录选择等待超时（避免用户慢操作导致误判超时、继而重试弹出多次）
 const DIRECTORY_SELECTION_TIMEOUT_MS = 180000; // 3分钟
 
+// MV3 service worker 可能被挂起/重启：用 storage 持久化“目录选择进行中”，避免重复弹窗
+let directorySelectionInProgress = false;
+let directorySelectionDownloadId = null;
+
 // 捕获模式：用于拦截自动捕获时触发的下载
 let captureMode = false;
 const capturingSkus = new Set();
@@ -108,9 +112,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // 初始化时加载保存的目录
-chrome.storage.local.get(["downloadDirectory", "downloadDirectoryConfirmed"]).then((result) => {
+chrome.storage.local
+  .get([
+    "downloadDirectory",
+    "downloadDirectoryConfirmed",
+    "downloadDirectorySelectionInProgress",
+    "downloadDirectorySelectionDownloadId"
+  ])
+  .then((result) => {
   savedDownloadDirectory = result.downloadDirectory || null;
   hasConfirmedDownloadLocation = Boolean(result.downloadDirectoryConfirmed) || Boolean(savedDownloadDirectory);
+  directorySelectionInProgress = Boolean(result.downloadDirectorySelectionInProgress);
+  directorySelectionDownloadId = result.downloadDirectorySelectionDownloadId || null;
 });
 
 // 监听下载项变化：用于在 saveAs=true 的首次下载中，等用户真正选完路径后提取目录。
@@ -119,7 +132,10 @@ chrome.downloads.onChanged.addListener((delta) => {
   try {
     const downloadId = delta?.id;
     if (!downloadId) return;
-    if (!pendingDirectoryExtractions.has(downloadId)) return;
+    const isSelectionDownload =
+      pendingDirectoryExtractions.has(downloadId) ||
+      (directorySelectionInProgress && directorySelectionDownloadId && downloadId === directorySelectionDownloadId);
+    if (!isSelectionDownload) return;
     const fullPath = delta?.filename?.current;
     if (!fullPath || typeof fullPath !== "string") return;
 
@@ -128,6 +144,16 @@ chrome.downloads.onChanged.addListener((delta) => {
       hasConfirmedDownloadLocation = true;
       chrome.storage.local.set({ downloadDirectoryConfirmed: true });
       log("bg:download_location_confirmed_onChanged", { downloadId, fullPath });
+    }
+
+    // 清理“目录选择进行中”标记
+    if (directorySelectionInProgress) {
+      directorySelectionInProgress = false;
+      directorySelectionDownloadId = null;
+      chrome.storage.local.set({
+        downloadDirectorySelectionInProgress: false,
+        downloadDirectorySelectionDownloadId: null
+      });
     }
 
     // 从完整路径中提取目录
@@ -147,6 +173,26 @@ chrome.downloads.onChanged.addListener((delta) => {
     // ignore
   }
 });
+
+function waitForDirectoryConfirmedFromStorage() {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const tick = () => {
+      chrome.storage.local
+        .get(["downloadDirectoryConfirmed", "downloadDirectorySelectionInProgress"])
+        .then((r) => {
+          const confirmed = Boolean(r.downloadDirectoryConfirmed);
+          const inProg = Boolean(r.downloadDirectorySelectionInProgress);
+          if (confirmed) return resolve(true);
+          if (!inProg) return reject(new Error("目录选择已取消"));
+          if (Date.now() - start > DIRECTORY_SELECTION_TIMEOUT_MS) return reject(new Error("等待目录选择超时"));
+          setTimeout(tick, 300);
+        })
+        .catch(() => setTimeout(tick, 300));
+    };
+    tick();
+  });
+}
 
 // 全局监听下载创建事件，用于立即拦截捕获模式下的下载
 chrome.downloads.onCreated.addListener((downloadItem) => {
@@ -552,6 +598,15 @@ async function triggerDownload(item, options) {
       });
     });
   }
+
+  // 如果 service worker 重启后仍处于“目录选择进行中”，不要再次弹窗，直接等待 storage 标记完成
+  if (!hasConfirmedDownloadLocation && directorySelectionInProgress) {
+    log("bg:waiting_for_directory_selection_storage_flag", { sku: item.sku });
+    directorySelectionPromise = waitForDirectoryConfirmedFromStorage().finally(() => {
+      directorySelectionPromise = null;
+    });
+    return directorySelectionPromise.then(() => triggerDownload(item, options));
+  }
   
   // 检查是否首次下载（未选择目录）
   // 使用锁确保只有一个下载会创建Promise
@@ -579,12 +634,25 @@ async function triggerDownload(item, options) {
             isWaitingForDirectorySelection = false;
             directorySelectionPromise = null;
             isCreatingDirectorySelectionPromise = false;
+            directorySelectionInProgress = false;
+            directorySelectionDownloadId = null;
+            chrome.storage.local.set({
+              downloadDirectorySelectionInProgress: false,
+              downloadDirectorySelectionDownloadId: null,
+              downloadDirectoryConfirmed: false
+            });
             log("bg:directory_selection_cancelled_by_user", { sku: item.sku, error: chrome.runtime.lastError.message });
             reject(new Error(chrome.runtime.lastError.message));
           } else {
             // 标记这个下载ID需要提取目录
             pendingDirectoryExtractions.add(downloadId);
             log("bg:directory_selection_download_created", { downloadId, sku: item.sku });
+            directorySelectionInProgress = true;
+            directorySelectionDownloadId = downloadId;
+            chrome.storage.local.set({
+              downloadDirectorySelectionInProgress: true,
+              downloadDirectorySelectionDownloadId: downloadId
+            });
             // 注意：Promise在这里不resolve，等待onDeterminingFilename中目录提取完成后再resolve
             // 使用定时检查目录是否已保存
             const checkDir = setInterval(() => {

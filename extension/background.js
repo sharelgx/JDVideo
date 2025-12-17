@@ -7,6 +7,8 @@ let logEndpoint = DEFAULT_LOG_ENDPOINT;
 
 // 存储用户选择的下载目录
 let savedDownloadDirectory = null;
+// 存储用户选择的“相对子目录”（相对于浏览器默认下载目录）。downloads.download 的 filename 只能用相对路径。
+let savedDownloadSubdir = null;
 // 标志：用户是否已经确认过一次下载位置（即使无法提取绝对目录，也用于避免每个文件都弹框）
 let hasConfirmedDownloadLocation = false;
 // 某些浏览器环境下 `chrome.downloads.download({ filename })` 可能不接受绝对路径。
@@ -50,10 +52,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "SET_DOWNLOAD_DIRECTORY") {
     // 设置下载目录
     savedDownloadDirectory = message.directory || null;
+    if (typeof message.subdir === "string") {
+      savedDownloadSubdir = message.subdir || null;
+    }
     disableDirectoryPrefixForFilename = false;
     hasConfirmedDownloadLocation = Boolean(savedDownloadDirectory);
     chrome.storage.local.set({
       downloadDirectory: savedDownloadDirectory,
+      downloadSubdir: savedDownloadSubdir,
       downloadDirectoryConfirmed: Boolean(savedDownloadDirectory)
     });
     log("bg:directory_saved", { directory: savedDownloadDirectory });
@@ -62,10 +68,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message?.type === "GET_DOWNLOAD_DIRECTORY") {
     // 获取保存的下载目录
-    chrome.storage.local.get(["downloadDirectory", "downloadDirectoryConfirmed"]).then((result) => {
+    chrome.storage.local.get(["downloadDirectory", "downloadSubdir", "downloadDirectoryConfirmed"]).then((result) => {
       savedDownloadDirectory = result.downloadDirectory || null;
+      savedDownloadSubdir = result.downloadSubdir || null;
       hasConfirmedDownloadLocation = Boolean(result.downloadDirectoryConfirmed) || Boolean(savedDownloadDirectory);
-      sendResponse({ ok: true, directory: savedDownloadDirectory, confirmed: hasConfirmedDownloadLocation });
+      sendResponse({
+        ok: true,
+        directory: savedDownloadDirectory,
+        subdir: savedDownloadSubdir,
+        confirmed: hasConfirmedDownloadLocation
+      });
     });
     return true;
   }
@@ -123,17 +135,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.storage.local
   .get([
     "downloadDirectory",
+    "downloadSubdir",
     "downloadDirectoryConfirmed",
     "downloadDirectorySelectionInProgress",
     "downloadDirectorySelectionDownloadId"
   ])
   .then((result) => {
   savedDownloadDirectory = result.downloadDirectory || null;
+  savedDownloadSubdir = result.downloadSubdir || null;
   hasConfirmedDownloadLocation = Boolean(result.downloadDirectoryConfirmed) || Boolean(savedDownloadDirectory);
   directorySelectionInProgress = Boolean(result.downloadDirectorySelectionInProgress);
   directorySelectionDownloadId = result.downloadDirectorySelectionDownloadId || null;
   directorySelectionPurpose = null;
 });
+
+function normalizePath(p) {
+  return String(p || "").replace(/\\/g, "/").replace(/\/+/g, "/");
+}
+
+function extractDirFromFullPath(fullPath) {
+  const fp = normalizePath(fullPath);
+  const m = fp.match(/^(.+)[/][^/]+$/);
+  return m?.[1] ? m[1] : null;
+}
+
+// 将绝对目录转换为“相对子目录”（相对于默认下载目录）。
+// 只能可靠识别 Downloads/下载 目录段；否则无法持久化到任意目录（Chrome 限制）。
+function extractSubdirFromDir(absDir) {
+  const dir = normalizePath(absDir).replace(/\/+$/, "");
+  const lower = dir.toLowerCase();
+  const markers = ["/downloads", "/下载"];
+  for (const marker of markers) {
+    const idx = lower.lastIndexOf(marker);
+    if (idx >= 0) {
+      const after = dir.substring(idx + marker.length).replace(/^\/+/, "");
+      return after || null;
+    }
+  }
+  return null;
+}
 
 // 监听下载项变化：用于在 saveAs=true 的首次下载中，等用户真正选完路径后提取目录。
 // 注意：onDeterminingFilename 触发时通常还没完成用户选择，因此不能依赖 downloadItem.filename。
@@ -166,27 +206,45 @@ chrome.downloads.onChanged.addListener((delta) => {
       });
     }
 
-    // 从完整路径中提取目录
-    if (fullPath.includes("/") || fullPath.includes("\\")) {
-      const dirMatch = fullPath.match(/^(.+)[\\/][^\\/]+$/);
-      if (dirMatch && dirMatch[1]) {
-        let selectedDir = dirMatch[1];
-        selectedDir = selectedDir.replace(/\\/g, "/");
-        savedDownloadDirectory = selectedDir;
-        chrome.storage.local.set({ downloadDirectory: savedDownloadDirectory });
+    // 从完整路径中提取目录（绝对路径仅用于展示/诊断）
+    const selectedDir = extractDirFromFullPath(fullPath);
+    if (selectedDir) {
+      savedDownloadDirectory = normalizePath(selectedDir);
+      // downloads.download 的 filename 只能用相对路径：这里保存“Downloads 下面的子目录”
+      savedDownloadSubdir = extractSubdirFromDir(savedDownloadDirectory);
+
+      if (!savedDownloadSubdir) {
+        // 不在 Downloads 下：无法固定保存到该目录（Chrome 限制）
+        hasConfirmedDownloadLocation = false;
+        chrome.storage.local.set({
+          downloadDirectory: savedDownloadDirectory,
+          downloadSubdir: null,
+          downloadDirectoryConfirmed: false
+        });
         pendingDirectoryExtractions.delete(downloadId);
         isWaitingForDirectorySelection = false;
-        log("bg:directory_selected_onChanged", { directory: savedDownloadDirectory, fullPath });
-
-        // 如果这是手动目录选择的占位下载，尽量清理下载记录/文件
-        try {
-          chrome.downloads.cancel(downloadId, () => {});
-          setTimeout(() => {
-            chrome.downloads.removeFile(downloadId, () => {});
-            chrome.downloads.erase({ id: downloadId }, () => {});
-          }, 800);
-        } catch (e) {}
+        log("bg:directory_selected_outside_downloads", { directory: savedDownloadDirectory, fullPath });
+        return;
       }
+
+      hasConfirmedDownloadLocation = true;
+      chrome.storage.local.set({
+        downloadDirectory: savedDownloadDirectory,
+        downloadSubdir: savedDownloadSubdir,
+        downloadDirectoryConfirmed: true
+      });
+      pendingDirectoryExtractions.delete(downloadId);
+      isWaitingForDirectorySelection = false;
+      log("bg:directory_selected_onChanged", { directory: savedDownloadDirectory, subdir: savedDownloadSubdir, fullPath });
+
+      // 如果这是手动目录选择的占位下载，尽量清理下载记录/文件
+      try {
+        chrome.downloads.cancel(downloadId, () => {});
+        setTimeout(() => {
+          chrome.downloads.removeFile(downloadId, () => {});
+          chrome.downloads.erase({ id: downloadId }, () => {});
+        }, 800);
+      } catch (e) {}
     }
   } catch (e) {
     // ignore
@@ -196,12 +254,12 @@ chrome.downloads.onChanged.addListener((delta) => {
 async function pickDownloadDirectory() {
   // 如果已确认，直接返回
   if (hasConfirmedDownloadLocation) {
-    return { confirmed: true, directory: savedDownloadDirectory || null };
+    return { confirmed: true, directory: savedDownloadDirectory || null, subdir: savedDownloadSubdir || null };
   }
   // 如果已经在进行中，直接等待完成
   if (directorySelectionInProgress) {
     await waitForDirectoryConfirmedFromStorage();
-    return { confirmed: true, directory: savedDownloadDirectory || null };
+    return { confirmed: true, directory: savedDownloadDirectory || null, subdir: savedDownloadSubdir || null };
   }
 
   // 发起一个“占位下载”，仅用于触发保存对话框选择目录
@@ -241,9 +299,16 @@ async function pickDownloadDirectory() {
         });
         log("bg:manual_pick_directory_download_created", { downloadId });
 
-        // 等待 confirmed 写入（由 onChanged 触发）
+        // 等待 confirmed 写入（由 onChanged 触发），并要求必须得到 subdir（必须在 Downloads 下）
         waitForDirectoryConfirmedFromStorage()
-          .then(() => resolve({ confirmed: true, directory: savedDownloadDirectory || null }))
+          .then(async () => {
+            const r = await chrome.storage.local.get(["downloadSubdir", "downloadDirectoryConfirmed"]);
+            if (!r.downloadDirectoryConfirmed || !r.downloadSubdir) {
+              reject(new Error("请选择浏览器默认下载目录(Downloads)下的文件夹，否则无法固定保存位置"));
+              return;
+            }
+            resolve({ confirmed: true, directory: savedDownloadDirectory || null, subdir: savedDownloadSubdir || null });
+          })
           .catch((e) => reject(e));
       }
     );
@@ -502,11 +567,10 @@ function buildFilename(item, options) {
     variantIndex > 0 && variantTotal > 1 ? `_${variantIndex}` : "";
   const base = `${sku}_${title}${variantSuffix}.mp4`;
   
-  // 如果用户选择了下载目录，构建完整路径
-  if (savedDownloadDirectory && !disableDirectoryPrefixForFilename) {
-    // 确保目录路径格式正确（使用/分隔符）
-    const dir = savedDownloadDirectory.replace(/\\/g, "/").replace(/\/+$/, "");
-    return `${dir}/${base}`;
+  // 如果用户选择了子目录，使用相对路径（相对于浏览器默认下载目录）
+  if (savedDownloadSubdir && !disableDirectoryPrefixForFilename) {
+    const dir = sanitizeFolder(savedDownloadSubdir);
+    return dir ? `${dir}/${base}` : base;
   }
   
   // 如果没有选择目录，只返回文件名（下载到浏览器默认目录）

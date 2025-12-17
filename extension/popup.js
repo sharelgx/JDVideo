@@ -36,10 +36,15 @@ async function refreshDirectoryGate() {
     const res = await chrome.runtime.sendMessage({ type: "GET_DOWNLOAD_DIRECTORY" });
     const confirmed = Boolean(res?.confirmed);
     const dir = res?.directory || null;
+    const subdir = res?.subdir || null;
     const gateOk = Boolean(dir) || confirmed;
     const dirStatus = document.getElementById("dirStatus");
     if (dirStatus) {
-      dirStatus.textContent = dir ? `下载目录：${dir}` : (confirmed ? "下载目录：已确认（使用默认下载目录）" : "下载目录：未设置");
+      if (subdir) {
+        dirStatus.textContent = `下载目录：Downloads/${subdir}`;
+      } else {
+        dirStatus.textContent = dir ? `下载目录：${dir}` : (confirmed ? "下载目录：已确认（使用默认下载目录）" : "下载目录：未设置");
+      }
     }
     // 强制前置：未确认目录时禁用解析/下载
     const refreshBtn = document.getElementById("refresh");

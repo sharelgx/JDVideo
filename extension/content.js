@@ -23,14 +23,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("[content] 收到消息:", message?.type);
   if (message?.type === "PARSE_ITEMS") {
     console.log("[content] 收到 PARSE_ITEMS 消息");
-    try {
-      const items = parseItems();
-      console.log("[content] parseItems 完成，返回", items.length, "项");
-      sendResponse({ items });
-    } catch (error) {
-      console.error("[content] parseItems 出错:", error);
-      sendResponse({ items: [], error: error.message });
-    }
+    parseAllPages()
+      .then((items) => {
+        console.log("[content] parseAllPages 完成，返回", items.length, "项");
+        sendResponse({ items });
+      })
+      .catch((error) => {
+        console.error("[content] parseAllPages 出错:", error);
+        sendResponse({ items: [], error: error?.message || String(error) });
+      });
     return true;
   }
   if (message?.type === "AUTO_CAPTURE_URLS") {
@@ -51,6 +52,81 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   return false;
 });
+
+function getActivePageNumber() {
+  try {
+    const active = document.querySelector(".ant-pagination-item-active");
+    const num = active?.textContent?.trim();
+    const n = Number(num);
+    return Number.isFinite(n) ? n : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function getTotalPagesFromPagination() {
+  try {
+    const items = Array.from(document.querySelectorAll(".ant-pagination-item"));
+    const nums = items
+      .map((el) => Number(el?.textContent?.trim()))
+      .filter((n) => Number.isFinite(n));
+    if (nums.length === 0) return null;
+    return Math.max(...nums);
+  } catch (e) {
+    return null;
+  }
+}
+
+async function waitForPageChange(prevPage, timeoutMs = 8000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const now = getActivePageNumber();
+    if (now && prevPage && now !== prevPage) return true;
+    // 有些场景 active 页码不更新或不可读，用 DOM 行数变化做兜底
+    await wait(250);
+  }
+  return false;
+}
+
+async function goToPage(targetPage) {
+  const current = getActivePageNumber();
+  if (!targetPage || !current || targetPage === current) return true;
+  const btn = Array.from(document.querySelectorAll(".ant-pagination-item"))
+    .find((el) => String(el.textContent || "").trim() === String(targetPage));
+  if (!btn) return false;
+  btn.click();
+  await waitForPageChange(current);
+  // 等待列表渲染完成
+  await wait(400);
+  return true;
+}
+
+async function parseAllPages() {
+  // 只在用户点击“解析列表”时触发；自动翻页解析全部分页
+  const firstPage = getActivePageNumber();
+  const totalPages = getTotalPagesFromPagination();
+
+  // 先解析当前页（会更新累计映射）
+  parseItems();
+
+  if (!totalPages || totalPages <= 1) {
+    return state.items || [];
+  }
+
+  // 依次切到 2..N 页解析
+  for (let p = 2; p <= totalPages; p++) {
+    const ok = await goToPage(p);
+    if (!ok) break;
+    parseItems();
+  }
+
+  // 尽量回到用户原本所在页，避免打断用户
+  if (firstPage && firstPage !== getActivePageNumber()) {
+    await goToPage(firstPage);
+  }
+
+  return state.items || [];
+}
 
 function ensureInject() {
   if (document.getElementById("__jdvideo_inject")) {

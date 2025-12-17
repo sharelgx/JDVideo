@@ -8,7 +8,10 @@ document.addEventListener("DOMContentLoaded", () => {
 async function init() {
   await resolveActiveTab();
   bindEvents();
-  await refreshItems();
+  // 打开弹窗不做任何解析/下载动作：由用户点击“解析列表”开始
+  setInfo("点击“解析列表”开始解析");
+  renderList();
+  updateStats();
   chrome.runtime.onMessage.addListener(handleProgress);
 }
 

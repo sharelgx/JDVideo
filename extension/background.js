@@ -72,6 +72,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       savedDownloadDirectory = result.downloadDirectory || null;
       savedDownloadSubdir = result.downloadSubdir || null;
       hasConfirmedDownloadLocation = Boolean(result.downloadDirectoryConfirmed) || Boolean(savedDownloadDirectory);
+      // 一旦使用相对子目录，就不需要“绝对路径前缀禁用”兜底
+      if (savedDownloadSubdir) disableDirectoryPrefixForFilename = false;
       sendResponse({
         ok: true,
         directory: savedDownloadDirectory,
@@ -144,6 +146,7 @@ chrome.storage.local
   savedDownloadDirectory = result.downloadDirectory || null;
   savedDownloadSubdir = result.downloadSubdir || null;
   hasConfirmedDownloadLocation = Boolean(result.downloadDirectoryConfirmed) || Boolean(savedDownloadDirectory);
+  if (savedDownloadSubdir) disableDirectoryPrefixForFilename = false;
   directorySelectionInProgress = Boolean(result.downloadDirectorySelectionInProgress);
   directorySelectionDownloadId = result.downloadDirectorySelectionDownloadId || null;
   directorySelectionPurpose = null;
@@ -227,6 +230,8 @@ chrome.downloads.onChanged.addListener((delta) => {
         return;
       }
 
+      // 子目录生效：确保后续 buildFilename 会带上前缀
+      disableDirectoryPrefixForFilename = false;
       hasConfirmedDownloadLocation = true;
       chrome.storage.local.set({
         downloadDirectory: savedDownloadDirectory,
@@ -492,9 +497,25 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
         let selectedDir = dirMatch[1];
         selectedDir = selectedDir.replace(/\\/g, "/");
         savedDownloadDirectory = selectedDir;
-        hasConfirmedDownloadLocation = true;
-        chrome.storage.local.set({ downloadDirectory: selectedDir, downloadDirectoryConfirmed: true });
-        log("bg:directory_selected", { directory: selectedDir, fullPath });
+        savedDownloadSubdir = extractSubdirFromDir(savedDownloadDirectory);
+        if (!savedDownloadSubdir) {
+          hasConfirmedDownloadLocation = false;
+          chrome.storage.local.set({
+            downloadDirectory: selectedDir,
+            downloadSubdir: null,
+            downloadDirectoryConfirmed: false
+          });
+          log("bg:directory_selected_outside_downloads_onDeterminingFilename", { directory: selectedDir, fullPath });
+        } else {
+          disableDirectoryPrefixForFilename = false;
+          hasConfirmedDownloadLocation = true;
+          chrome.storage.local.set({
+            downloadDirectory: selectedDir,
+            downloadSubdir: savedDownloadSubdir,
+            downloadDirectoryConfirmed: true
+          });
+          log("bg:directory_selected", { directory: selectedDir, subdir: savedDownloadSubdir, fullPath });
+        }
         pendingDirectoryExtractions.delete(downloadId);
         
         // 清除等待标志，允许后续下载使用已选择的目录
@@ -509,7 +530,7 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
       directorySelectionPromise = null;
       isCreatingDirectorySelectionPromise = false;
       hasConfirmedDownloadLocation = false;
-      chrome.storage.local.set({ downloadDirectoryConfirmed: false });
+      chrome.storage.local.set({ downloadDirectoryConfirmed: false, downloadSubdir: null });
     }
   }
   
@@ -547,6 +568,13 @@ function sanitizeFilenamePart(input) {
   return (input || "unknown").replace(/[\\/:*?"<>|]/g, "_").trim();
 }
 
+function truncateStr(input, maxLen) {
+  const s = String(input || "");
+  if (!maxLen || maxLen <= 0) return s;
+  if (s.length <= maxLen) return s;
+  return s.slice(0, maxLen).trim();
+}
+
 function sanitizeFolder(input) {
   if (!input) return "";
   // 去掉首尾斜杠和非法字符，避免跳出默认下载目录
@@ -560,7 +588,8 @@ function sanitizeFolder(input) {
 
 function buildFilename(item, options) {
   const sku = sanitizeFilenamePart(item.sku || "unknown");
-  const title = sanitizeFilenamePart(item.title || "video");
+  // Windows 路径长度/文件名限制：标题过长时会触发 invalid filename，导致回退到默认目录
+  const title = truncateStr(sanitizeFilenamePart(item.title || "video"), 60);
   const variantIndex = Number(item.variantIndex || 0);
   const variantTotal = Number(item.variantTotal || 0);
   const variantSuffix =

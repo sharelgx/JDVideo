@@ -37,13 +37,16 @@ async function refreshDirectoryGate() {
     const confirmed = Boolean(res?.confirmed);
     const dir = res?.directory || null;
     const subdir = res?.subdir || null;
-    const gateOk = Boolean(dir) || confirmed;
+    // 强制前置：必须拿到 Downloads 下的子目录，才能保证后续下载落在你指定的文件夹
+    const gateOk = Boolean(subdir);
     const dirStatus = document.getElementById("dirStatus");
     if (dirStatus) {
       if (subdir) {
         dirStatus.textContent = `下载目录：Downloads/${subdir}`;
       } else {
-        dirStatus.textContent = dir ? `下载目录：${dir}` : (confirmed ? "下载目录：已确认（使用默认下载目录）" : "下载目录：未设置");
+        dirStatus.textContent = dir
+          ? `下载目录：${dir}（无法固定，请重新选择 Downloads 下的文件夹）`
+          : (confirmed ? "下载目录：已确认（但未识别子目录，请重新选择）" : "下载目录：未设置");
       }
     }
     // 强制前置：未确认目录时禁用解析/下载
@@ -61,7 +64,7 @@ async function pickDirectory() {
   setInfo("请选择下载保存文件夹（只需一次）…");
   log("popup:pick_directory_click");
   try {
-    // 如果已经确认过目录，直接提示即可
+    // 如果已经正确设置过（有 subdir），直接提示即可
     const alreadyOk = await refreshDirectoryGate();
     if (alreadyOk) {
       setInfo("✅ 下载文件夹已设置，无需重复选择");
@@ -70,7 +73,7 @@ async function pickDirectory() {
 
     const res = await chrome.runtime.sendMessage({ type: "PICK_DOWNLOAD_DIRECTORY" });
     // 兼容旧后台：可能不返回 ok 字段，只返回 confirmed/directory
-    const resOk = res?.ok === true || Boolean(res?.confirmed) || Boolean(res?.directory);
+    const resOk = res?.ok === true || Boolean(res?.subdir) || Boolean(res?.confirmed);
     if (!resOk) {
       setInfo(`选择失败：${res?.error || "未知错误"}`);
       return;

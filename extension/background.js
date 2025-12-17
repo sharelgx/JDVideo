@@ -536,7 +536,9 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
   }
   
   // ========== 允许下载继续 ==========
-  suggest({ filename: downloadItem.filename });
+  // 不要强行覆盖 filename：否则会把 downloads.download({ filename: "子目录/文件.mp4" }) 的路径抹掉，
+  // 导致实际下载落回默认目录。
+  suggest();
 });
 
 function log(event, data) {

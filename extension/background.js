@@ -619,7 +619,7 @@ function buildFilenameWithSubdir(item, titleMaxLen) {
   const variantIndex = Number(item.variantIndex || 0);
   const variantTotal = Number(item.variantTotal || 0);
   const variantSuffix = variantIndex > 0 && variantTotal > 1 ? `_${variantIndex}` : "";
-  const base = `${sku}_${title}${variantSuffix}.mp4`;
+  const base = `${sku}----${title}${variantSuffix}.mp4`;
   const dir = sanitizeFolder(savedDownloadSubdir);
   return dir ? `${dir}/${base}` : base;
 }
@@ -643,7 +643,7 @@ function buildFilename(item, options) {
   const variantTotal = Number(item.variantTotal || 0);
   const variantSuffix =
     variantIndex > 0 && variantTotal > 1 ? `_${variantIndex}` : "";
-  const base = `${sku}_${title}${variantSuffix}.mp4`;
+  const base = `${sku}----${title}${variantSuffix}.mp4`;
   
   // 如果用户选择了子目录，使用相对路径（相对于浏览器默认下载目录）
   if (savedDownloadSubdir && !disableDirectoryPrefixForFilename) {

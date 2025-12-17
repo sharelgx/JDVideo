@@ -580,6 +580,17 @@ function truncateStr(input, maxLen) {
   return s.slice(0, maxLen).trim();
 }
 
+function buildFilenameWithSubdir(item, titleMaxLen) {
+  const sku = sanitizeFilenamePart(item.sku || "unknown");
+  const title = truncateStr(sanitizeFilenamePart(item.title || "video"), titleMaxLen);
+  const variantIndex = Number(item.variantIndex || 0);
+  const variantTotal = Number(item.variantTotal || 0);
+  const variantSuffix = variantIndex > 0 && variantTotal > 1 ? `_${variantIndex}` : "";
+  const base = `${sku}_${title}${variantSuffix}.mp4`;
+  const dir = sanitizeFolder(savedDownloadSubdir);
+  return dir ? `${dir}/${base}` : base;
+}
+
 function sanitizeFolder(input) {
   if (!input) return "";
   // 去掉首尾斜杠和非法字符，避免跳出默认下载目录
@@ -593,7 +604,7 @@ function sanitizeFolder(input) {
 
 function buildFilename(item, options) {
   const sku = sanitizeFilenamePart(item.sku || "unknown");
-  // Windows 路径长度/文件名限制：标题过长时会触发 invalid filename，导致回退到默认目录
+  // Windows 路径长度/文件名限制：标题过长时会触发 invalid filename
   const title = truncateStr(sanitizeFilenamePart(item.title || "video"), 60);
   const variantIndex = Number(item.variantIndex || 0);
   const variantTotal = Number(item.variantTotal || 0);
@@ -609,6 +620,39 @@ function buildFilename(item, options) {
   
   // 如果没有选择目录，只返回文件名（下载到浏览器默认目录）
   return base;
+}
+
+function downloadWithCandidates({ url, candidates, saveAs }) {
+  return new Promise((resolve, reject) => {
+    let i = 0;
+    const tryNext = (lastErr) => {
+      if (i >= candidates.length) {
+        reject(lastErr || new Error("download failed"));
+        return;
+      }
+      const filename = candidates[i++];
+      log("bg:download_attempt", {
+        idx: i,
+        filename,
+        saveAs,
+        subdir: savedDownloadSubdir || null,
+        disableDirectoryPrefixForFilename
+      });
+      chrome.downloads.download(
+        { url, filename, conflictAction: "uniquify", saveAs: Boolean(saveAs) },
+        (downloadId) => {
+          if (chrome.runtime.lastError) {
+            const msg = chrome.runtime.lastError.message || "";
+            log("bg:download_attempt_failed", { filename, error: msg });
+            tryNext(new Error(msg));
+          } else {
+            resolve(downloadId);
+          }
+        }
+      );
+    };
+    tryNext();
+  });
 }
 
 async function runDownloadQueue(items, options) {
@@ -727,49 +771,21 @@ async function triggerDownload(item, options) {
     log("bg:waiting_for_directory_selection_promise", { sku: item.sku, hasPromise: !!directorySelectionPromise });
     return directorySelectionPromise.then(() => {
       // 目录选择完成，使用保存的目录继续下载
-      const finalFilename = buildFilename(item, options);
-      log("bg:directory_selected_resuming_download", { sku: item.sku, directory: savedDownloadDirectory });
-      return new Promise((resolve, reject) => {
-        chrome.downloads.download(
-          {
-            url: videoUrl,
-            filename: finalFilename,
-            conflictAction: "uniquify",
-            saveAs: false
-          },
-          (downloadId) => {
-            if (chrome.runtime.lastError) {
-              // 兜底：如果目录前缀导致 filename 非法，回退到默认下载目录
-              const msg = chrome.runtime.lastError.message || "";
-              log("bg:download_failed_with_directory_prefix", { sku: item.sku, error: msg, filename: finalFilename });
-              if (!disableDirectoryPrefixForFilename && /invalid.*filename|filename.*invalid/i.test(msg)) {
-                disableDirectoryPrefixForFilename = true;
-                const fallbackFilename = buildFilename(item, options);
-                log("bg:download_fallback_filename", { sku: item.sku, filename: fallbackFilename });
-                chrome.downloads.download(
-                  {
-                    url: videoUrl,
-                    filename: fallbackFilename,
-                    conflictAction: "uniquify",
-                    saveAs: false
-                  },
-                  (downloadId2) => {
-                    if (chrome.runtime.lastError) {
-                      reject(new Error(chrome.runtime.lastError.message));
-                    } else {
-                      resolve(downloadId2);
-                    }
-                  }
-                );
-                return;
-              }
-              reject(new Error(msg));
-            } else {
-              resolve(downloadId);
-            }
-          }
-        );
-      });
+      log("bg:directory_selected_resuming_download", { sku: item.sku, directory: savedDownloadDirectory, subdir: savedDownloadSubdir });
+      const dir = sanitizeFolder(savedDownloadSubdir);
+      const sku = sanitizeFilenamePart(item.sku || "unknown");
+      const variantIndex = Number(item.variantIndex || 0);
+      const variantTotal = Number(item.variantTotal || 0);
+      const variantSuffix = variantIndex > 0 && variantTotal > 1 ? `_${variantIndex}` : "";
+      const candidates = [
+        buildFilenameWithSubdir(item, 60),
+        buildFilenameWithSubdir(item, 30),
+        buildFilenameWithSubdir(item, 10),
+        dir ? `${dir}/${sku}${variantSuffix}.mp4` : `${sku}${variantSuffix}.mp4`,
+        // 最后兜底（仍可能落回默认目录）
+        `${sku}${variantSuffix}.mp4`
+      ];
+      return downloadWithCandidates({ url: videoUrl, candidates, saveAs: false });
     });
   }
 
@@ -865,47 +881,19 @@ async function triggerDownload(item, options) {
   
   // 后续下载：使用保存的目录，不弹框
   log("bg:download_using_saved_directory", { sku: item.sku, directory: savedDownloadDirectory });
-  return new Promise((resolve, reject) => {
-    chrome.downloads.download(
-      {
-        url: videoUrl,
-        filename,
-        conflictAction: "uniquify",
-        saveAs: false // 不弹框，直接下载到已选择的目录
-      },
-      (downloadId) => {
-        if (chrome.runtime.lastError) {
-          // 兜底：如果目录前缀导致 filename 非法，回退到默认下载目录
-          const msg = chrome.runtime.lastError.message || "";
-          log("bg:download_failed_with_directory_prefix", { sku: item.sku, error: msg, filename });
-          if (!disableDirectoryPrefixForFilename && /invalid.*filename|filename.*invalid/i.test(msg)) {
-            disableDirectoryPrefixForFilename = true;
-            const fallbackFilename = buildFilename(item, options);
-            log("bg:download_fallback_filename", { sku: item.sku, filename: fallbackFilename });
-            chrome.downloads.download(
-              {
-                url: videoUrl,
-                filename: fallbackFilename,
-                conflictAction: "uniquify",
-                saveAs: false
-              },
-              (downloadId2) => {
-                if (chrome.runtime.lastError) {
-                  reject(new Error(chrome.runtime.lastError.message));
-                } else {
-                  resolve(downloadId2);
-                }
-              }
-            );
-            return;
-          }
-          reject(new Error(msg));
-        } else {
-          resolve(downloadId);
-        }
-      }
-    );
-  });
+  const dir = sanitizeFolder(savedDownloadSubdir);
+  const sku = sanitizeFilenamePart(item.sku || "unknown");
+  const variantIndex = Number(item.variantIndex || 0);
+  const variantTotal = Number(item.variantTotal || 0);
+  const variantSuffix = variantIndex > 0 && variantTotal > 1 ? `_${variantIndex}` : "";
+  const candidates = [
+    filename,
+    buildFilenameWithSubdir(item, 30),
+    buildFilenameWithSubdir(item, 10),
+    dir ? `${dir}/${sku}${variantSuffix}.mp4` : `${sku}${variantSuffix}.mp4`,
+    `${sku}${variantSuffix}.mp4`
+  ];
+  return downloadWithCandidates({ url: videoUrl, candidates, saveAs: false });
 }
 
 function wait(ms) {

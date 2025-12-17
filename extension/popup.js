@@ -120,7 +120,7 @@ async function startDownload() {
     if (allSuccess.length > 0 && allSuccess.length === currentItems.filter(i => i.videoUrl).length) {
       setInfo(`✅ 全部已下载完成 (${allSuccess.length})`);
     } else if (pending.length > 0) {
-      setInfo(`还有 ${pending.length} 条待捕获：请先点击“自动捕获 URL”，或在页面手动点一次下载按钮后再“解析列表”`);
+      setInfo(`还有 ${pending.length} 条未解析到视频地址：请翻页后再次点“解析列表”，或等待页面接口加载完成后再点一次“解析列表”`);
     } else {
       setInfo("没有需要下载的项");
     }

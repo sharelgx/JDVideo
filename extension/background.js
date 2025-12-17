@@ -22,6 +22,8 @@ let isWaitingForDirectorySelection = false;
 let directorySelectionPromise = null;
 // 锁：用于确保创建Promise的操作是原子的（防止并发创建）
 let isCreatingDirectorySelectionPromise = false;
+// 首次目录选择等待超时（避免用户慢操作导致误判超时、继而重试弹出多次）
+const DIRECTORY_SELECTION_TIMEOUT_MS = 180000; // 3分钟
 
 // 捕获模式：用于拦截自动捕获时触发的下载
 let captureMode = false;
@@ -435,6 +437,21 @@ async function downloadWithRetry(item, retry, options) {
     } catch (error) {
       attempts += 1;
       const isLast = attempts > retry;
+
+      // 目录选择属于“全局一次性动作”：如果被取消/超时，不要对每个文件反复重试弹框
+      const msg = error?.message || String(error);
+      if (/目录选择/.test(msg) || /等待目录选择超时/.test(msg)) {
+        notifyProgress({
+          stage: "failed",
+          sku: item.sku,
+          title: item.title,
+          videoUrl: item.videoUrl,
+          error: msg,
+          attempt: attempts
+        });
+        throw error;
+      }
+
       notifyProgress({
         stage: isLast ? "failed" : "retrying",
         sku: item.sku,
@@ -581,13 +598,13 @@ async function triggerDownload(item, options) {
                 reject(new Error("用户取消了目录选择"));
               }
             }, 50);
-            // 最多等待10秒
+            // 最多等待较长时间，避免用户慢操作造成误判超时并导致重试多次弹窗
             setTimeout(() => {
               clearInterval(checkDir);
               if (!hasConfirmedDownloadLocation) {
                 reject(new Error("等待目录选择超时"));
               }
-            }, 10000);
+            }, DIRECTORY_SELECTION_TIMEOUT_MS);
           }
         }
       );

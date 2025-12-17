@@ -60,7 +60,7 @@ h1 {
 }
 
 #autoCapture {
-  display: inline-flex; /* 显示：由用户手动触发，避免自动下载 */
+  display: none; /* 按交付需求隐藏：仅“解析列表 + 批量下载” */
 }
 
 .card.inline {

@@ -9,8 +9,8 @@ async function init() {
   await resolveActiveTab();
   bindEvents();
   // 打开弹窗不做任何解析/下载动作：由用户点击“解析列表”开始
-  await refreshDirectoryGate();
-  setInfo("先选择下载文件夹，然后点击“解析列表”开始解析");
+  const ok = await refreshDirectoryGate();
+  setInfo(ok ? "点击“解析列表”开始解析" : "先选择下载文件夹，然后点击“解析列表”开始解析");
   renderList();
   updateStats();
   chrome.runtime.onMessage.addListener(handleProgress);
@@ -36,6 +36,7 @@ async function refreshDirectoryGate() {
     const res = await chrome.runtime.sendMessage({ type: "GET_DOWNLOAD_DIRECTORY" });
     const confirmed = Boolean(res?.confirmed);
     const dir = res?.directory || null;
+    const gateOk = Boolean(dir) || confirmed;
     const dirStatus = document.getElementById("dirStatus");
     if (dirStatus) {
       dirStatus.textContent = dir ? `下载目录：${dir}` : (confirmed ? "下载目录：已确认（使用默认下载目录）" : "下载目录：未设置");
@@ -43,9 +44,9 @@ async function refreshDirectoryGate() {
     // 强制前置：未确认目录时禁用解析/下载
     const refreshBtn = document.getElementById("refresh");
     const downloadBtn = document.getElementById("downloadAll");
-    if (refreshBtn) refreshBtn.disabled = !confirmed;
-    if (downloadBtn) downloadBtn.disabled = !confirmed;
-    return confirmed;
+    if (refreshBtn) refreshBtn.disabled = !gateOk;
+    if (downloadBtn) downloadBtn.disabled = !gateOk;
+    return gateOk;
   } catch (e) {
     return false;
   }
@@ -55,8 +56,17 @@ async function pickDirectory() {
   setInfo("请选择下载保存文件夹（只需一次）…");
   log("popup:pick_directory_click");
   try {
+    // 如果已经确认过目录，直接提示即可
+    const alreadyOk = await refreshDirectoryGate();
+    if (alreadyOk) {
+      setInfo("✅ 下载文件夹已设置，无需重复选择");
+      return;
+    }
+
     const res = await chrome.runtime.sendMessage({ type: "PICK_DOWNLOAD_DIRECTORY" });
-    if (!res?.ok) {
+    // 兼容旧后台：可能不返回 ok 字段，只返回 confirmed/directory
+    const resOk = res?.ok === true || Boolean(res?.confirmed) || Boolean(res?.directory);
+    if (!resOk) {
       setInfo(`选择失败：${res?.error || "未知错误"}`);
       return;
     }

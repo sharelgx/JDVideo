@@ -497,6 +497,25 @@
                   // 立即尝试提取所有SKU视频
                   const allSkuVideos = extractAllSkuVideosFromResponse(data);
                   console.log("[jdvideo] 从getPageSkuVideo提取到的SKU视频列表:", allSkuVideos);
+
+                  // 将批量 SKU->URL 映射推送给 content script（避免隔离世界无法直接读取 window 函数/变量）
+                  if (allSkuVideos && allSkuVideos.length > 0) {
+                    try {
+                      window.postMessage(
+                        {
+                          source: "jdvideo-inject",
+                          type: "SKU_VIDEOS_BULK",
+                          items: allSkuVideos,
+                          ts: Date.now(),
+                          meta: { apiUrl: reqUrl }
+                        },
+                        "*"
+                      );
+                      log("inject:sku_videos_bulk_posted", { count: allSkuVideos.length, apiUrl: reqUrl.substring(0, 120) });
+                    } catch (e) {
+                      log("inject:sku_videos_bulk_post_error", { error: e.message });
+                    }
+                  }
                   
                   if (allSkuVideos.length === 0) {
                     console.warn("[jdvideo] 警告：未能从getPageSkuVideo响应中提取到SKU视频映射，请检查数据结构");

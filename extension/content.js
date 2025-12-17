@@ -7,6 +7,8 @@ const state = {
   allItemsBySku: new Map(), // sku -> item
   allSkuOrder: [], // 按首次发现顺序保存 sku
   explainId: null, // 当前讲解页id（切换讲解页时自动清空累计）
+  // 从 inject 侧主动推送过来的 SKU->URL 映射（最可靠）
+  skuVideoMap: new Map(), // sku -> url
   lastPageStats: null // { page, pageCount, missingCount }
 };
 
@@ -175,6 +177,32 @@ function bindPageListeners() {
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const data = event.data;
+    if (data?.source === "jdvideo-inject" && data.type === "SKU_VIDEOS_BULK") {
+      const items = Array.isArray(data.items) ? data.items : [];
+      if (items.length > 0) {
+        const baseHeaders = buildHeaders();
+        for (const it of items) {
+          const sku = it?.sku ? String(it.sku) : null;
+          const url = it?.url ? String(it.url) : null;
+          if (!sku || !url) continue;
+          // 更新映射
+          state.skuVideoMap.set(sku, url);
+          // 同步到 capturedUrls（供 parseItems 直接读取）
+          if (!state.capturedUrls.get(sku)?.url) {
+            state.capturedUrls.set(sku, { url, headers: baseHeaders });
+          }
+          // 同步到累计 items（跨页也能拿到）
+          const existing = state.allItemsBySku.get(sku);
+          if (existing && !existing.videoUrl) {
+            existing.videoUrl = url;
+            state.allItemsBySku.set(sku, existing);
+          }
+        }
+        // 同步 state.items（给弹窗刷新用）
+        state.items = state.allSkuOrder.map((k) => state.allItemsBySku.get(k)).filter(Boolean);
+        log("content:sku_videos_bulk_received", { count: items.length });
+      }
+    }
     if (data?.source === "jdvideo-inject" && data.type === "CAPTURED_URL") {
       // 优先使用传入的SKU，其次使用state.pendingSku，最后才用临时SKU
       const sku = data.sku || state.pendingSku || findFirstPendingSku() || `capture-${Date.now()}`;
@@ -578,6 +606,12 @@ function parseItems() {
     // 方案2：尝试从页面数据中提取视频URL（不点击）
     // 优先从inject.js的预加载响应中获取（特别是 live_pc_getPageSkuVideo 接口）
     let videoUrl = null;
+
+    // 方法0：优先使用 inject 主动推送的 SKU->URL 映射（最可靠）
+    const mapped = state.skuVideoMap.get(sku);
+    if (mapped) {
+      videoUrl = mapped;
+    }
     
     // 方法1：从预加载的批量响应中获取（最优先）
     if (window.__jdvideoGetAllPreloadResponses) {

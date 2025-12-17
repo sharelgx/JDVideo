@@ -48,21 +48,9 @@ async function refreshItems() {
     updateStats();
     const missing = currentItems.filter((i) => !i.videoUrl).length;
     
-    // 立即显示解析结果，不等待自动捕获
-    setInfo(`解析完成，共 ${currentItems.length} 条${missing ? `，待捕获 ${missing} 条` : ""}`);
-    
-    if (missing > 0) {
-      // 自动捕获在后台运行，不阻塞界面
-      // 使用 setTimeout 确保在下一个事件循环中执行，不阻塞当前执行
-      setTimeout(() => {
-        setInfo(`解析完成，共 ${currentItems.length} 条，后台自动捕获中…（${missing} 条，不影响使用）`);
-        // 在后台异步执行，不阻塞界面
-        autoCaptureInBackground(missing).catch((err) => {
-          log("popup:auto_capture_failed", { error: err?.message });
-          // 捕获失败不影响界面，静默失败
-        });
-      }, 0);
-    }
+    // 仅展示解析结果；不再自动触发捕获/点击逻辑（避免“打开插件就自动下载/弹窗”）
+    // 如需捕获，请用户主动点击“自动捕获 URL”（若按钮隐藏，则按页面提示手动触发一次下载按钮再解析）。
+    setInfo(`解析完成，共 ${currentItems.length} 条${missing ? `，待捕获 ${missing} 条（不会自动捕获）` : ""}`);
   } catch (error) {
     setInfo("解析失败，请确认已在直播讲解页");
   }
@@ -199,64 +187,6 @@ function handleProgress(message) {
 function setInfo(text) {
   const info = document.getElementById("info");
   info.textContent = text || "";
-}
-
-// 后台自动捕获，不阻塞界面，静默更新
-async function autoCaptureInBackground(expectedCount) {
-  if (!activeTabId) {
-    return;
-  }
-  log("popup:auto_capture_background_start", { expectedCount });
-  try {
-    const res = await chrome.tabs.sendMessage(activeTabId, {
-      type: "AUTO_CAPTURE_URLS",
-      options: { delayMs: 2200, retries: 3 }
-    });
-    
-    if (!res || res?.error || !res.ok) {
-      log("popup:auto_capture_background_failed", { error: res?.error || "unknown" });
-      return;
-    }
-    
-    // 更新列表，但不强制更新提示信息（避免打断用户）
-    const newItems = (res?.items || []).map((item) => ({
-      ...item,
-      status: item.videoUrl ? "ready" : "待捕获"
-    }));
-    
-    // 检查是否有新的捕获成功的项
-    const newSuccessCount = newItems.filter((item, idx) => {
-      const oldItem = currentItems[idx];
-      return oldItem && !oldItem.videoUrl && item.videoUrl;
-    }).length;
-    
-    if (newSuccessCount > 0) {
-      // 有新的捕获成功，更新列表
-      currentItems = newItems;
-      renderList();
-      updateStats();
-      
-      const success = res?.successCount || 0;
-      const total = res?.totalTried || 0;
-      const stillMissing = currentItems.filter((i) => !i.videoUrl).length;
-      
-      // 只在有新增成功时才更新提示，且不覆盖用户可能手动设置的信息
-      if (stillMissing === 0) {
-        setInfo(`✅ 自动捕获完成，全部成功（${success}/${total}）`);
-      } else {
-        setInfo(`✅ 自动捕获部分完成，成功 ${success}/${total}，仍有 ${stillMissing} 条待捕获`);
-      }
-    }
-    
-    log("popup:auto_capture_background_done", { 
-      success: res?.successCount || 0, 
-      total: res?.totalTried || 0,
-      newSuccessCount 
-    });
-  } catch (error) {
-    log("popup:auto_capture_background_exception", { error: error?.message });
-    // 静默失败，不影响用户体验
-  }
 }
 
 // 手动触发的自动捕获，会显示详细提示
